@@ -74,7 +74,10 @@ export class OkfReportView extends ItemView {
   }
   setProgress(fraction: number, label?: string) {
     const pct = Math.max(0, Math.min(100, Math.round(fraction * 100)));
-    if (this.progressBar) this.progressBar.style.width = `${pct}%`;
+    // Drive width via a CSS custom property (styles.css consumes --okf-pct),
+    // avoiding direct static-style manipulation flagged by plugin review.
+    if (this.progressBar)
+      this.progressBar.style.setProperty("--okf-pct", `${pct}%`);
     if (this.progressWrap)
       this.progressWrap.setAttribute("aria-valuenow", String(pct));
     if (label && this.progressLabel)

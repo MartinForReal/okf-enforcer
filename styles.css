@@ -159,7 +159,7 @@
 }
 .okf-progress-bar {
   height: 100%;
-  width: 0%;
+  width: var(--okf-pct, 0%);
   background: var(--interactive-accent);
   transition: width 0.15s ease;
 }

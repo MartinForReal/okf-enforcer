@@ -369,7 +369,7 @@ var OkfReportView = class extends import_obsidian2.ItemView {
   setProgress(fraction, label) {
     const pct = Math.max(0, Math.min(100, Math.round(fraction * 100)));
     if (this.progressBar)
-      this.progressBar.style.width = `${pct}%`;
+      this.progressBar.style.setProperty("--okf-pct", `${pct}%`);
     if (this.progressWrap)
       this.progressWrap.setAttribute("aria-valuenow", String(pct));
     if (label && this.progressLabel)
