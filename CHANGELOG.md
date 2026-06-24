@@ -4,6 +4,19 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-06-24
+
+### Changed
+- Addressed Obsidian plugin-review feedback: no longer detach the view on unload
+  or startup (preserves user-positioned panels); settings headings use
+  `Setting().setHeading()`; resolved floating-promise and type-safety lint
+  (typed `parseYaml`/frontmatter access, `instanceof TFolder` narrowing,
+  removed unnecessary assertions and a redundant regex escape).
+- Progress-bar width now driven by a CSS custom property instead of an inline style.
+
+### Added
+- GitHub artifact attestations for release assets (build provenance).
+
 ## [0.1.0] - 2026-06-24
 
 Initial release.
@@ -27,4 +40,5 @@ Initial release.
 - Batched, non-blocking scan/fix queue with an inline progress bar for large vaults.
 - Settings for automation toggles, batch size, warning rules, and excluded folders.
 
+[0.1.1]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.1.1
 [0.1.0]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.1.0

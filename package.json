@@ -1,13 +1,20 @@
 {
   "name": "okf-enforcer",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Validate and enforce the Open Knowledge Format (OKF v0.1) in Obsidian.",
   "main": "main.js",
   "scripts": {
     "build": "node esbuild.config.mjs",
     "version": "node version-bump.mjs"
   },
-  "keywords": ["obsidian", "obsidian-plugin", "okf", "open-knowledge-format", "frontmatter", "metadata"],
+  "keywords": [
+    "obsidian",
+    "obsidian-plugin",
+    "okf",
+    "open-knowledge-format",
+    "frontmatter",
+    "metadata"
+  ],
   "license": "Apache-2.0",
   "devDependencies": {
     "@types/node": "^20.11.0",

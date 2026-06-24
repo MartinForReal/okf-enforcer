@@ -1,7 +1,7 @@
 {
   "id": "okf-enforcer",
   "name": "OKF Enforcer",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "minAppVersion": "1.4.0",
   "description": "Validate and enforce the Open Knowledge Format (OKF v0.1): required type frontmatter, index.md/log.md structure, quick-fixes, on-save checks, and a vault-wide report.",
   "author": "MartinForReal",
