@@ -37,7 +37,7 @@ var DEFAULT_SETTINGS = {
   fixOnSave: true,
   autoGenerateIndex: true,
   batchSize: 50,
-  excludeFolders: [".obsidian", "Templates", ".trash"]
+  excludeFolders: ["Templates"]
 };
 var FM_RE = /^---\r?\n([\s\S]*?)\r?\n---/;
 var ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -622,7 +622,10 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
     return !file.path.includes("/");
   }
   candidateFiles() {
-    return this.app.vault.getMarkdownFiles().filter((f) => !isExcluded(f.path, this.settings));
+    const configDir = this.app.vault.configDir;
+    return this.app.vault.getMarkdownFiles().filter(
+      (f) => !f.path.startsWith(configDir + "/") && !isExcluded(f.path, this.settings)
+    );
   }
   /** Current report view, if open. */
   getReportView() {
@@ -1044,10 +1047,6 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    new import_obsidian3.Setting(containerEl).setName("OKF Enforcer").setHeading();
-    containerEl.createEl("p", {
-      text: "Targets Open Knowledge Format v0.1. \xA79 conformance rules are enforced as errors; recommended fields and SHOULD-guidance are warnings you can toggle."
-    });
     new import_obsidian3.Setting(containerEl).setName("Default type for auto-fix").setDesc("Value inserted into `type` when fixing notes that lack it.").addText(
       (t) => t.setValue(this.plugin.settings.defaultType).onChange(async (v) => {
         this.plugin.settings.defaultType = v || "Concept";

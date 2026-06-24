@@ -187,9 +187,15 @@ export default class OkfPlugin extends Plugin {
   }
 
   private candidateFiles(): TFile[] {
+    // The config folder name is user-configurable (not always ".obsidian").
+    const configDir = this.app.vault.configDir;
     return this.app.vault
       .getMarkdownFiles()
-      .filter((f) => !isExcluded(f.path, this.settings));
+      .filter(
+        (f) =>
+          !f.path.startsWith(configDir + "/") &&
+          !isExcluded(f.path, this.settings)
+      );
   }
 
   /** Current report view, if open. */
@@ -669,11 +675,6 @@ class OkfSettingTab extends PluginSettingTab {
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    new Setting(containerEl).setName("OKF Enforcer").setHeading();
-    containerEl.createEl("p", {
-      text: "Targets Open Knowledge Format v0.1. §9 conformance rules are enforced as errors; recommended fields and SHOULD-guidance are warnings you can toggle.",
-    });
-
     new Setting(containerEl)
       .setName("Default type for auto-fix")
       .setDesc("Value inserted into `type` when fixing notes that lack it.")

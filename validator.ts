@@ -43,7 +43,7 @@ export const DEFAULT_SETTINGS: OkfSettings = {
   fixOnSave: true,
   autoGenerateIndex: true,
   batchSize: 50,
-  excludeFolders: [".obsidian", "Templates", ".trash"],
+  excludeFolders: ["Templates"],
 };
 
 const FM_RE = /^---\r?\n([\s\S]*?)\r?\n---/;
