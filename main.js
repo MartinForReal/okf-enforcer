@@ -47,10 +47,8 @@ function basename(path) {
 }
 function isReserved(path) {
   const f = (path.split("/").pop() || "").toLowerCase();
-  if (f === "index.md")
-    return "index";
-  if (f === "log.md")
-    return "log";
+  if (f === "index.md") return "index";
+  if (f === "log.md") return "log";
   return null;
 }
 function isExcluded(path, settings) {
@@ -60,16 +58,13 @@ function isExcluded(path, settings) {
 }
 function splitFrontmatter(content) {
   const m = content.match(FM_RE);
-  if (!m)
-    return { hasFm: false, raw: "", body: content };
+  if (!m) return { hasFm: false, raw: "", body: content };
   return { hasFm: true, raw: m[1], body: content.slice(m[0].length) };
 }
 function validateContent(path, content, isRoot, settings) {
   const reserved = isReserved(path);
-  if (reserved === "index")
-    return validateIndex(content, isRoot, settings);
-  if (reserved === "log")
-    return validateLog(content, settings);
+  if (reserved === "index") return validateIndex(content, isRoot, settings);
+  if (reserved === "log") return validateLog(content, settings);
   return validateConcept(path, content, settings);
 }
 function validateConcept(path, content, settings) {
@@ -87,7 +82,9 @@ function validateConcept(path, content, settings) {
   let data = {};
   try {
     const parsed = (0, import_obsidian.parseYaml)(raw);
-    data = parsed && typeof parsed === "object" ? parsed : {};
+    if (parsed && typeof parsed === "object") {
+      data = parsed;
+    }
   } catch (e) {
     issues.push({
       severity: "error",
@@ -148,8 +145,7 @@ function validateConcept(path, content, settings) {
 }
 function validateIndex(content, isRoot, settings) {
   const issues = [];
-  if (!settings.checkReservedFiles)
-    return issues;
+  if (!settings.checkReservedFiles) return issues;
   const split = splitFrontmatter(content);
   const hasFm = split.hasFm;
   const raw = split.raw;
@@ -163,7 +159,10 @@ function validateIndex(content, isRoot, settings) {
     } else {
       let data = {};
       try {
-        data = (0, import_obsidian.parseYaml)(raw) || {};
+        const parsed = (0, import_obsidian.parseYaml)(raw);
+        if (parsed && typeof parsed === "object") {
+          data = parsed;
+        }
       } catch (e) {
         issues.push({
           severity: "error",
@@ -194,7 +193,7 @@ function validateIndex(content, isRoot, settings) {
   }
   const body = hasFm ? split.body : content;
   const hasHeading = /^#{1,6}\s+\S/m.test(body);
-  const hasLinkBullet = /^\s*[*\-]\s+\[[^\]]+\]\([^)]+\)/m.test(body);
+  const hasLinkBullet = /^\s*[*-]\s+\[[^\]]+\]\([^)]+\)/m.test(body);
   if (body.trim().length > 0 && !hasLinkBullet) {
     issues.push({
       severity: "warning",
@@ -212,8 +211,7 @@ function validateIndex(content, isRoot, settings) {
 }
 function validateLog(content, settings) {
   const issues = [];
-  if (!settings.checkReservedFiles)
-    return issues;
+  if (!settings.checkReservedFiles) return issues;
   const { hasFm } = splitFrontmatter(content);
   if (hasFm) {
     issues.push({
@@ -259,19 +257,15 @@ function validateLog(content, settings) {
 }
 function hasNonEmpty(data, key) {
   const v = data[key];
-  if (v === void 0 || v === null)
-    return false;
-  if (typeof v === "string")
-    return v.trim().length > 0;
-  if (Array.isArray(v))
-    return v.length > 0;
+  if (v === void 0 || v === null) return false;
+  if (typeof v === "string") return v.trim().length > 0;
+  if (Array.isArray(v)) return v.length > 0;
   return true;
 }
 function applyFixes(path, content, issues, settings) {
   const applied = [];
   const fixes = new Set(issues.filter((i) => i.fix).map((i) => i.fix));
-  if (fixes.size === 0)
-    return { content, applied };
+  if (fixes.size === 0) return { content, applied };
   const nowIso = (/* @__PURE__ */ new Date()).toISOString().replace(/\.\d{3}Z$/, "Z");
   const title = basename(path);
   const split = splitFrontmatter(content);
@@ -348,10 +342,14 @@ var OkfReportView = class extends import_obsidian2.ItemView {
     const toolbar = c.createDiv({ cls: "okf-toolbar" });
     const rescan = toolbar.createEl("button", { text: "Rescan" });
     rescan.setAttribute("aria-label", "Re-scan the whole vault");
-    rescan.onclick = () => this.plugin.scanVault();
+    rescan.onclick = () => {
+      void this.plugin.scanVault();
+    };
     const fixAll = toolbar.createEl("button", { text: "Fix all" });
     fixAll.setAttribute("aria-label", "Auto-fix every fixable issue in the vault");
-    fixAll.onclick = () => this.plugin.fixAll();
+    fixAll.onclick = () => {
+      void this.plugin.fixAll();
+    };
     this.progressWrap = c.createDiv({ cls: "okf-progress is-hidden" });
     const track = this.progressWrap.createDiv({ cls: "okf-progress-track" });
     this.progressBar = track.createDiv({ cls: "okf-progress-bar" });
@@ -361,8 +359,7 @@ var OkfReportView = class extends import_obsidian2.ItemView {
   // ---- progress API (driven by the plugin's processQueue) ----
   showProgress(label) {
     var _a;
-    if (!this.progressWrap)
-      this.buildSkeleton();
+    if (!this.progressWrap) this.buildSkeleton();
     (_a = this.progressWrap) == null ? void 0 : _a.removeClass("is-hidden");
     this.setProgress(0, label);
   }
@@ -383,9 +380,7 @@ var OkfReportView = class extends import_obsidian2.ItemView {
     this.results = results;
     this.scanned = scanned;
     const paths = new Set(results.map((r) => r.path));
-    for (const p of [...this.expanded])
-      if (!paths.has(p))
-        this.expanded.delete(p);
+    for (const p of [...this.expanded]) if (!paths.has(p)) this.expanded.delete(p);
     this.renderBody();
   }
   /** Re-render only the summary + file list (leaves toolbar/progress intact). */
@@ -415,8 +410,7 @@ var OkfReportView = class extends import_obsidian2.ItemView {
     const sorted = [...this.results].sort((a, b2) => {
       const ae = a.issues.some((i) => i.severity === "error") ? 0 : 1;
       const be = b2.issues.some((i) => i.severity === "error") ? 0 : 1;
-      if (ae !== be)
-        return ae - be;
+      if (ae !== be) return ae - be;
       return a.path.localeCompare(b2.path);
     });
     const list = b.createDiv({ cls: "okf-list" });
@@ -432,10 +426,8 @@ var OkfReportView = class extends import_obsidian2.ItemView {
       head.createSpan({ cls: "okf-file-name", text: name });
       head.createSpan({ cls: "okf-count", text: String(r.issues.length) });
       head.onclick = () => {
-        if (this.expanded.has(r.path))
-          this.expanded.delete(r.path);
-        else
-          this.expanded.add(r.path);
+        if (this.expanded.has(r.path)) this.expanded.delete(r.path);
+        else this.expanded.add(r.path);
         this.renderBody();
       };
       if (isOpen) {
@@ -449,8 +441,7 @@ var OkfReportView = class extends import_obsidian2.ItemView {
           const txt = row.createSpan({ cls: "okf-issue-text" });
           txt.createSpan({ text: issue.message + " " });
           txt.createSpan({ cls: "okf-rule", text: issue.rule });
-          if (issue.fix)
-            txt.createSpan({ cls: "okf-fixable", text: " \xB7 fixable" });
+          if (issue.fix) txt.createSpan({ cls: "okf-fixable", text: " \xB7 fixable" });
         }
         const open = block.createEl("a", {
           cls: "okf-open-link",
@@ -459,8 +450,7 @@ var OkfReportView = class extends import_obsidian2.ItemView {
         open.onclick = (e) => {
           e.preventDefault();
           const f = this.app.vault.getAbstractFileByPath(r.path);
-          if (f instanceof import_obsidian2.TFile)
-            this.app.workspace.getLeaf(false).openFile(f);
+          if (f instanceof import_obsidian2.TFile) void this.app.workspace.getLeaf(false).openFile(f);
         };
       }
     }
@@ -479,8 +469,7 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
     this.pendingResults = null;
     this.flushIndexes = (0, import_obsidian3.debounce)(
       async () => {
-        if (!this.settings.autoGenerateIndex)
-          return;
+        if (!this.settings.autoGenerateIndex) return;
         const folders = [...this.dirtyIndexFolders];
         this.dirtyIndexFolders.clear();
         for (const path of folders) {
@@ -504,21 +493,23 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
       "aria-label",
       "OKF \u2014 click to auto-fix this note"
     );
-    this.statusEl.onClickEvent(() => this.onStatusClick());
+    this.statusEl.onClickEvent(() => {
+      void this.onStatusClick();
+    });
     this.addCommand({
       id: "okf-validate-vault",
       name: "Validate vault (full report)",
-      callback: () => this.scanVault()
+      callback: () => {
+        void this.scanVault();
+      }
     });
     this.addCommand({
       id: "okf-validate-active",
       name: "Validate active note",
       checkCallback: (checking) => {
         const f = this.app.workspace.getActiveFile();
-        if (!f || f.extension !== "md")
-          return false;
-        if (!checking)
-          this.validateActive(f, true);
+        if (!f || f.extension !== "md") return false;
+        if (!checking) void this.validateActive(f, true);
         return true;
       }
     });
@@ -527,50 +518,48 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
       name: "Fix active note (add missing OKF fields)",
       checkCallback: (checking) => {
         const f = this.app.workspace.getActiveFile();
-        if (!f || f.extension !== "md")
-          return false;
-        if (!checking)
-          this.fixFile(f, true);
+        if (!f || f.extension !== "md") return false;
+        if (!checking) void this.fixFile(f, true);
         return true;
       }
     });
     this.addCommand({
       id: "okf-fix-all",
       name: "Fix all auto-fixable issues in vault",
-      callback: () => this.fixAll()
+      callback: () => {
+        void this.fixAll();
+      }
     });
     this.addCommand({
       id: "okf-generate-index",
       name: "Generate/refresh index.md for a folder",
       checkCallback: (checking) => {
         const f = this.app.workspace.getActiveFile();
-        if (!f)
-          return false;
-        if (!checking)
-          this.generateIndexForFolder(f.parent);
+        if (!f || !(f.parent instanceof import_obsidian3.TFolder)) return false;
+        if (!checking) void this.generateIndexForFolder(f.parent);
         return true;
       }
     });
     this.addCommand({
       id: "okf-generate-all-indexes",
       name: "Generate/refresh index.md for ALL folders",
-      callback: () => this.generateAllIndexes()
+      callback: () => {
+        void this.generateAllIndexes();
+      }
     });
     this.addCommand({
       id: "okf-add-log-entry",
       name: "Add log.md entry (current folder)",
       checkCallback: (checking) => {
         const f = this.app.workspace.getActiveFile();
-        if (!f)
-          return false;
-        if (!checking)
-          this.addLogEntry(f.parent);
+        if (!f || !(f.parent instanceof import_obsidian3.TFolder)) return false;
+        if (!checking) void this.addLogEntry(f.parent);
         return true;
       }
     });
     const liveCheck = (0, import_obsidian3.debounce)(
       (file) => {
-        this.onFileChanged(file);
+        void this.onFileChanged(file);
       },
       500,
       true
@@ -588,46 +577,45 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
     );
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => {
-        if (file && file.extension === "md")
-          this.validateActive(file, false);
+        if (file && file.extension === "md") void this.validateActive(file, false);
       })
     );
     this.registerEvent(
       this.app.vault.on("create", (file) => {
-        if (!this.layoutReady)
-          return;
+        if (!this.layoutReady) return;
         if (file instanceof import_obsidian3.TFile && file.extension === "md") {
           if (this.selfWrites.has(file.path)) {
             this.selfWrites.delete(file.path);
             return;
           }
-          window.setTimeout(() => this.onFileChanged(file), 300);
+          window.setTimeout(() => {
+            void this.onFileChanged(file);
+          }, 300);
         }
       })
     );
     this.addSettingTab(new OkfSettingTab(this.app, this));
     this.app.workspace.onLayoutReady(() => {
       this.layoutReady = true;
-      this.app.workspace.detachLeavesOfType(OKF_VIEW_TYPE);
       if (this.settings.scanOnStartup) {
-        window.setTimeout(() => this.scanVault(false, true), 1500);
+        window.setTimeout(() => {
+          void this.scanVault(false, true);
+        }, 1500);
       }
     });
   }
   onunload() {
-    this.app.workspace.detachLeavesOfType(OKF_VIEW_TYPE);
   }
   async loadSettings() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const saved = await this.loadData();
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, saved != null ? saved : {});
   }
   async saveSettings() {
     await this.saveData(this.settings);
   }
   isConcept(file) {
-    if (file.extension !== "md")
-      return false;
-    if (isExcluded(file.path, this.settings))
-      return false;
+    if (file.extension !== "md") return false;
+    if (isExcluded(file.path, this.settings)) return false;
     return true;
   }
   isRoot(file) {
@@ -645,8 +633,7 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
     const size = Math.max(1, this.settings.batchSize | 0);
     const showBar = !!label && items.length > size;
     const view = showBar ? this.getReportView() : null;
-    if (showBar)
-      view == null ? void 0 : view.showProgress(label);
+    if (showBar && label) view == null ? void 0 : view.showProgress(label);
     const baseStatus = this.statusEl.getText();
     for (let i = 0; i < items.length; i += size) {
       const batch = items.slice(i, i + size);
@@ -666,8 +653,7 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
     }
   }
   async onFileChanged(file) {
-    if (!this.isConcept(file))
-      return;
+    if (!this.isConcept(file)) return;
     if (this.settings.fixOnSave && !isReserved(file.path)) {
       const n = await this.fixFile(file, false);
       if (n > 0 && file.parent) {
@@ -737,9 +723,8 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
     this.updateStatus(issues);
     if (openReport) {
       this.renderResults(issues.length ? [{ path: file.path, issues }] : [], 1);
-      this.activateView();
-      if (!issues.length)
-        new import_obsidian3.Notice("OKF: active note is conformant \u2705");
+      void this.activateView();
+      if (!issues.length) new import_obsidian3.Notice("OKF: active note is conformant \u2705");
     }
   }
   updateStatus(issues) {
@@ -767,8 +752,7 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
       );
     } else {
       const lines = issues.slice(0, 8).map((i) => `${i.severity === "error" ? "\u2716" : "\u26A0"} ${i.rule} ${i.message}`);
-      if (issues.length > 8)
-        lines.push(`\u2026and ${issues.length - 8} more`);
+      if (issues.length > 8) lines.push(`\u2026and ${issues.length - 8} more`);
       lines.push("");
       lines.push("Click to scan the whole vault");
       this.statusEl.setAttribute("aria-label", lines.join("\n"));
@@ -776,8 +760,7 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
   }
   /** Vault-wide summary tooltip on the status bar (set after a full scan). */
   refreshStatusTooltip() {
-    if (!this.lastSummary)
-      return;
+    if (!this.lastSummary) return;
     const { scanned, errFiles, warnFiles } = this.lastSummary;
     const ok = scanned - errFiles - warnFiles;
     this.statusEl.setAttribute(
@@ -792,8 +775,7 @@ Click to open the report`
   }
   async scanVault(reveal = true, silent = false) {
     if (this.busy) {
-      if (!silent)
-        new import_obsidian3.Notice("OKF: a scan/fix is already running\u2026");
+      if (!silent) new import_obsidian3.Notice("OKF: a scan/fix is already running\u2026");
       return;
     }
     this.busy = true;
@@ -810,8 +792,7 @@ Click to open the report`
             this.isRoot(f),
             this.settings
           );
-          if (issues.length)
-            results.push({ path: f.path, issues });
+          if (issues.length) results.push({ path: f.path, issues });
         },
         silent ? void 0 : "OKF: scanning"
       );
@@ -823,8 +804,7 @@ Click to open the report`
       const warnFiles = results.length - errFiles;
       this.lastSummary = { scanned: files.length, errFiles, warnFiles };
       this.refreshStatusTooltip();
-      if (reveal && !silent)
-        await this.activateView();
+      if (reveal && !silent) await this.activateView();
       if (!silent) {
         new import_obsidian3.Notice(
           `OKF: scanned ${files.length} notes \u2014 ${errFiles} with errors, ${warnFiles} with warnings only.`
@@ -868,8 +848,7 @@ Click to open the report`
         new import_obsidian3.Notice(`OKF fixed ${file.basename}: ${applied.join(", ")}`);
       return applied.length;
     }
-    if (notify)
-      new import_obsidian3.Notice("OKF: nothing auto-fixable on this note.");
+    if (notify) new import_obsidian3.Notice("OKF: nothing auto-fixable on this note.");
     return 0;
   }
   /**
@@ -878,13 +857,15 @@ Click to open the report`
    */
   async setFrontmatterFields(file, fields) {
     this.selfWrites.add(file.path);
-    await this.app.fileManager.processFrontMatter(file, (fm) => {
-      for (const [k, v] of Object.entries(fields)) {
-        const val = (v != null ? v : "").trim();
-        if (val.length > 0)
-          fm[k] = val;
+    await this.app.fileManager.processFrontMatter(
+      file,
+      (fm) => {
+        for (const [k, v] of Object.entries(fields)) {
+          const val = (v != null ? v : "").trim();
+          if (val.length > 0) fm[k] = val;
+        }
       }
-    });
+    );
     const content = await this.app.vault.read(file);
     const issues = validateContent(
       file.path,
@@ -907,8 +888,7 @@ Click to open the report`
         files,
         async (f) => {
           const n = await this.fixFile(f, false);
-          if (n > 0)
-            changed++;
+          if (n > 0) changed++;
         },
         "OKF: fixing"
       );
@@ -919,9 +899,9 @@ Click to open the report`
     await this.scanVault();
   }
   async generateIndexForFolder(folder, notify = true) {
+    var _a, _b;
     if (!folder) {
-      if (notify)
-        new import_obsidian3.Notice("OKF: no folder for the active note.");
+      if (notify) new import_obsidian3.Notice("OKF: no folder for the active note.");
       return;
     }
     const children = folder.children;
@@ -929,14 +909,13 @@ Click to open the report`
     const subdirs = [];
     for (const child of children) {
       if (child instanceof import_obsidian3.TFile) {
-        if (child.extension !== "md")
-          continue;
-        if (isReserved(child.path))
-          continue;
-        const cache = this.app.metadataCache.getFileCache(child);
-        const fm = (cache == null ? void 0 : cache.frontmatter) || {};
-        const title = fm["title"] || basename(child.path);
-        const desc = fm["description"] || "";
+        if (child.extension !== "md") continue;
+        if (isReserved(child.path)) continue;
+        const fm = (_b = (_a = this.app.metadataCache.getFileCache(child)) == null ? void 0 : _a.frontmatter) != null ? _b : {};
+        const fmTitle = fm["title"];
+        const fmDesc = fm["description"];
+        const title = typeof fmTitle === "string" && fmTitle.length > 0 ? fmTitle : basename(child.path);
+        const desc = typeof fmDesc === "string" ? fmDesc : "";
         concepts.push({ link: encodeURI(child.name), title, desc });
       } else if (child instanceof import_obsidian3.TFolder) {
         subdirs.push({ link: encodeURI(child.name) + "/", name: child.name });
@@ -945,14 +924,12 @@ Click to open the report`
     let out = "";
     if (subdirs.length) {
       out += "# Subdirectories\n\n";
-      for (const s of subdirs)
-        out += `* [${s.name}](${s.link}) - 
+      for (const s of subdirs) out += `* [${s.name}](${s.link}) - 
 `;
       out += "\n";
     }
     out += "# Concepts\n\n";
-    if (concepts.length === 0)
-      out += "_No concepts yet._\n";
+    if (concepts.length === 0) out += "_No concepts yet._\n";
     for (const c of concepts) {
       out += `* [${c.title}](${c.link})${c.desc ? " - " + c.desc : ""}
 `;
@@ -961,16 +938,14 @@ Click to open the report`
     const existing = this.app.vault.getAbstractFileByPath(indexPath);
     if (existing instanceof import_obsidian3.TFile) {
       const current = await this.app.vault.read(existing);
-      if (current === out)
-        return;
+      if (current === out) return;
       this.selfWrites.add(indexPath);
       await this.app.vault.modify(existing, out);
     } else {
       this.selfWrites.add(indexPath);
       await this.app.vault.create(indexPath, out);
     }
-    if (notify)
-      new import_obsidian3.Notice(`OKF: wrote ${indexPath}`);
+    if (notify) new import_obsidian3.Notice(`OKF: wrote ${indexPath}`);
   }
   async generateAllIndexes() {
     if (this.busy) {
@@ -981,13 +956,12 @@ Click to open the report`
     try {
       const folders = /* @__PURE__ */ new Set();
       for (const f of this.candidateFiles()) {
-        if (f.parent)
-          folders.add(f.parent);
+        if (f.parent) folders.add(f.parent);
       }
       const list = [...folders];
       await this.processQueue(
         list,
-        async (folder) => this.generateIndexForFolder(folder, false),
+        (folder) => this.generateIndexForFolder(folder, false),
         "OKF: building indexes"
       );
       new import_obsidian3.Notice(`OKF: refreshed index.md in ${list.length} folder(s).`);
@@ -996,8 +970,7 @@ Click to open the report`
     }
   }
   async addLogEntry(folder) {
-    if (!folder)
-      return;
+    if (!folder) return;
     const logPath = folder.path === "/" || folder.path === "" ? "log.md" : `${folder.path}/log.md`;
     const today = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
     const entry = `* **Update**: `;
@@ -1071,7 +1044,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "OKF Enforcer \u2014 settings" });
+    new import_obsidian3.Setting(containerEl).setName("OKF Enforcer").setHeading();
     containerEl.createEl("p", {
       text: "Targets Open Knowledge Format v0.1. \xA79 conformance rules are enforced as errors; recommended fields and SHOULD-guidance are warnings you can toggle."
     });
@@ -1087,7 +1060,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
-    containerEl.createEl("h3", { text: "Automation" });
+    new import_obsidian3.Setting(containerEl).setName("Automation").setHeading();
     new import_obsidian3.Setting(containerEl).setName("Scan vault on startup").setDesc(
       "Run a full conformance scan automatically when the plugin loads (deferred until the workspace is ready)."
     ).addToggle(
@@ -1121,7 +1094,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
-    containerEl.createEl("h3", { text: "Rules" });
+    new import_obsidian3.Setting(containerEl).setName("Rules").setHeading();
     new import_obsidian3.Setting(containerEl).setName("Warn on missing recommended fields").setDesc("title, description, timestamp (\xA74.1).").addToggle(
       (tg) => tg.setValue(this.plugin.settings.warnRecommendedFields).onChange(async (v) => {
         this.plugin.settings.warnRecommendedFields = v;

@@ -52,10 +52,10 @@ export class OkfReportView extends ItemView {
     const toolbar = c.createDiv({ cls: "okf-toolbar" });
     const rescan = toolbar.createEl("button", { text: "Rescan" });
     rescan.setAttribute("aria-label", "Re-scan the whole vault");
-    rescan.onclick = () => this.plugin.scanVault();
+    rescan.onclick = () => { void this.plugin.scanVault(); };
     const fixAll = toolbar.createEl("button", { text: "Fix all" });
     fixAll.setAttribute("aria-label", "Auto-fix every fixable issue in the vault");
-    fixAll.onclick = () => this.plugin.fixAll();
+    fixAll.onclick = () => { void this.plugin.fixAll(); };
 
     // Progress bar — hidden until a scan/fix is running.
     this.progressWrap = c.createDiv({ cls: "okf-progress is-hidden" });
@@ -170,7 +170,7 @@ export class OkfReportView extends ItemView {
         open.onclick = (e) => {
           e.preventDefault();
           const f = this.app.vault.getAbstractFileByPath(r.path);
-          if (f instanceof TFile) this.app.workspace.getLeaf(false).openFile(f);
+          if (f instanceof TFile) void this.app.workspace.getLeaf(false).openFile(f);
         };
       }
     }

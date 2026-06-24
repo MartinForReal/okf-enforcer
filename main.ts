@@ -51,12 +51,12 @@ export default class OkfPlugin extends Plugin {
       "aria-label",
       "OKF — click to auto-fix this note"
     );
-    this.statusEl.onClickEvent(() => this.onStatusClick());
+    this.statusEl.onClickEvent(() => { void this.onStatusClick(); });
 
     this.addCommand({
       id: "okf-validate-vault",
       name: "Validate vault (full report)",
-      callback: () => this.scanVault(),
+      callback: () => { void this.scanVault(); },
     });
     this.addCommand({
       id: "okf-validate-active",
@@ -64,7 +64,7 @@ export default class OkfPlugin extends Plugin {
       checkCallback: (checking) => {
         const f = this.app.workspace.getActiveFile();
         if (!f || f.extension !== "md") return false;
-        if (!checking) this.validateActive(f, true);
+        if (!checking) void this.validateActive(f, true);
         return true;
       },
     });
@@ -74,44 +74,44 @@ export default class OkfPlugin extends Plugin {
       checkCallback: (checking) => {
         const f = this.app.workspace.getActiveFile();
         if (!f || f.extension !== "md") return false;
-        if (!checking) this.fixFile(f, true);
+        if (!checking) void this.fixFile(f, true);
         return true;
       },
     });
     this.addCommand({
       id: "okf-fix-all",
       name: "Fix all auto-fixable issues in vault",
-      callback: () => this.fixAll(),
+      callback: () => { void this.fixAll(); },
     });
     this.addCommand({
       id: "okf-generate-index",
       name: "Generate/refresh index.md for a folder",
       checkCallback: (checking) => {
         const f = this.app.workspace.getActiveFile();
-        if (!f) return false;
-        if (!checking) this.generateIndexForFolder(f.parent as TFolder);
+        if (!f || !(f.parent instanceof TFolder)) return false;
+        if (!checking) void this.generateIndexForFolder(f.parent);
         return true;
       },
     });
     this.addCommand({
       id: "okf-generate-all-indexes",
       name: "Generate/refresh index.md for ALL folders",
-      callback: () => this.generateAllIndexes(),
+      callback: () => { void this.generateAllIndexes(); },
     });
     this.addCommand({
       id: "okf-add-log-entry",
       name: "Add log.md entry (current folder)",
       checkCallback: (checking) => {
         const f = this.app.workspace.getActiveFile();
-        if (!f) return false;
-        if (!checking) this.addLogEntry(f.parent as TFolder);
+        if (!f || !(f.parent instanceof TFolder)) return false;
+        if (!checking) void this.addLogEntry(f.parent);
         return true;
       },
     });
 
     const liveCheck = debounce(
       (file: TFile) => {
-        this.onFileChanged(file);
+        void this.onFileChanged(file);
       },
       500,
       true
@@ -129,7 +129,7 @@ export default class OkfPlugin extends Plugin {
     );
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => {
-        if (file && file.extension === "md") this.validateActive(file, false);
+        if (file && file.extension === "md") void this.validateActive(file, false);
       })
     );
 
@@ -146,7 +146,7 @@ export default class OkfPlugin extends Plugin {
             return;
           }
           // Defer briefly so the importer finishes writing the file body first.
-          window.setTimeout(() => this.onFileChanged(file), 300);
+          window.setTimeout(() => { void this.onFileChanged(file); }, 300);
         }
       })
     );
@@ -155,22 +155,23 @@ export default class OkfPlugin extends Plugin {
 
     this.app.workspace.onLayoutReady(() => {
       this.layoutReady = true;
-      // Panel is hidden by default: if Obsidian restored a saved OKF leaf from
-      // a previous session, detach it so the view only appears on demand.
-      this.app.workspace.detachLeavesOfType(OKF_VIEW_TYPE);
+      // The panel is hidden by default simply because we never auto-open it;
+      // we do not detach existing leaves, so a user-positioned view is preserved.
       if (this.settings.scanOnStartup) {
         // Silent: update the status bar/tooltip only, never open the panel.
-        window.setTimeout(() => this.scanVault(false, true), 1500);
+        window.setTimeout(() => { void this.scanVault(false, true); }, 1500);
       }
     });
   }
 
   onunload() {
-    this.app.workspace.detachLeavesOfType(OKF_VIEW_TYPE);
+    // Intentionally do not detach the view here: Obsidian persists leaf
+    // placement, and detaching would reset a user-moved panel on next load.
   }
 
   async loadSettings() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const saved = (await this.loadData()) as Partial<OkfSettings> | null;
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, saved ?? {});
   }
   async saveSettings() {
     await this.saveData(this.settings);
@@ -208,7 +209,7 @@ export default class OkfPlugin extends Plugin {
     // rather than a persistent popup Notice.
     const showBar = !!label && items.length > size;
     const view = showBar ? this.getReportView() : null;
-    if (showBar) view?.showProgress(label as string);
+    if (showBar && label) view?.showProgress(label);
     const baseStatus = this.statusEl.getText();
 
     for (let i = 0; i < items.length; i += size) {
@@ -330,7 +331,7 @@ export default class OkfPlugin extends Plugin {
     this.updateStatus(issues);
     if (openReport) {
       this.renderResults(issues.length ? [{ path: file.path, issues }] : [], 1);
-      this.activateView();
+      void this.activateView();
       if (!issues.length) new Notice("OKF: active note is conformant ✅");
     }
   }
@@ -470,12 +471,15 @@ export default class OkfPlugin extends Plugin {
    */
   async setFrontmatterFields(file: TFile, fields: Record<string, string>) {
     this.selfWrites.add(file.path);
-    await this.app.fileManager.processFrontMatter(file, (fm: any) => {
-      for (const [k, v] of Object.entries(fields)) {
-        const val = (v ?? "").trim();
-        if (val.length > 0) fm[k] = val;
+    await this.app.fileManager.processFrontMatter(
+      file,
+      (fm: Record<string, unknown>) => {
+        for (const [k, v] of Object.entries(fields)) {
+          const val = (v ?? "").trim();
+          if (val.length > 0) fm[k] = val;
+        }
       }
-    });
+    );
     // Refresh status after the edit.
     const content = await this.app.vault.read(file);
     const issues = validateContent(
@@ -524,10 +528,15 @@ export default class OkfPlugin extends Plugin {
       if (child instanceof TFile) {
         if (child.extension !== "md") continue;
         if (isReserved(child.path)) continue;
-        const cache = this.app.metadataCache.getFileCache(child);
-        const fm = cache?.frontmatter || {};
-        const title = (fm["title"] as string) || basename(child.path);
-        const desc = (fm["description"] as string) || "";
+        const fm: Record<string, unknown> =
+          this.app.metadataCache.getFileCache(child)?.frontmatter ?? {};
+        const fmTitle = fm["title"];
+        const fmDesc = fm["description"];
+        const title =
+          typeof fmTitle === "string" && fmTitle.length > 0
+            ? fmTitle
+            : basename(child.path);
+        const desc = typeof fmDesc === "string" ? fmDesc : "";
         concepts.push({ link: encodeURI(child.name), title, desc });
       } else if (child instanceof TFolder) {
         subdirs.push({ link: encodeURI(child.name) + "/", name: child.name });
@@ -577,7 +586,7 @@ export default class OkfPlugin extends Plugin {
       const list = [...folders];
       await this.processQueue(
         list,
-        async (folder) => this.generateIndexForFolder(folder, false),
+        (folder) => this.generateIndexForFolder(folder, false),
         "OKF: building indexes"
       );
       new Notice(`OKF: refreshed index.md in ${list.length} folder(s).`);
@@ -660,7 +669,7 @@ class OkfSettingTab extends PluginSettingTab {
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "OKF Enforcer — settings" });
+    new Setting(containerEl).setName("OKF Enforcer").setHeading();
     containerEl.createEl("p", {
       text: "Targets Open Knowledge Format v0.1. §9 conformance rules are enforced as errors; recommended fields and SHOULD-guidance are warnings you can toggle.",
     });
@@ -685,7 +694,7 @@ class OkfSettingTab extends PluginSettingTab {
         })
       );
 
-    containerEl.createEl("h3", { text: "Automation" });
+    new Setting(containerEl).setName("Automation").setHeading();
 
     new Setting(containerEl)
       .setName("Scan vault on startup")
@@ -741,7 +750,7 @@ class OkfSettingTab extends PluginSettingTab {
           })
       );
 
-    containerEl.createEl("h3", { text: "Rules" });
+    new Setting(containerEl).setName("Rules").setHeading();
 
     new Setting(containerEl)
       .setName("Warn on missing recommended fields")

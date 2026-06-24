@@ -108,8 +108,10 @@ function validateConcept(
 
   let data: Record<string, unknown> = {};
   try {
-    const parsed = parseYaml(raw);
-    data = parsed && typeof parsed === "object" ? (parsed as any) : {};
+    const parsed: unknown = parseYaml(raw);
+    if (parsed && typeof parsed === "object") {
+      data = parsed as Record<string, unknown>;
+    }
   } catch (e) {
     issues.push({
       severity: "error",
@@ -162,7 +164,7 @@ function validateConcept(
       });
     } else if (
       typeof data["timestamp"] === "string" &&
-      isNaN(Date.parse(data["timestamp"] as string))
+      isNaN(Date.parse(data["timestamp"]))
     ) {
       issues.push({
         severity: "warning",
@@ -204,9 +206,12 @@ function validateIndex(
           "Non-root `index.md` must not contain frontmatter (§6). Only the bundle-root index.md may, and only for `okf_version`.",
       });
     } else {
-      let data: any = {};
+      let data: Record<string, unknown> = {};
       try {
-        data = parseYaml(raw) || {};
+        const parsed: unknown = parseYaml(raw);
+        if (parsed && typeof parsed === "object") {
+          data = parsed as Record<string, unknown>;
+        }
       } catch {
         issues.push({
           severity: "error",
@@ -238,7 +243,7 @@ function validateIndex(
 
   const body = hasFm ? split.body : content;
   const hasHeading = /^#{1,6}\s+\S/m.test(body);
-  const hasLinkBullet = /^\s*[*\-]\s+\[[^\]]+\]\([^)]+\)/m.test(body);
+  const hasLinkBullet = /^\s*[*-]\s+\[[^\]]+\]\([^)]+\)/m.test(body);
   if (body.trim().length > 0 && !hasLinkBullet) {
     issues.push({
       severity: "warning",
