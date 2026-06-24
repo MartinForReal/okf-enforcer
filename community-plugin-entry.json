@@ -1,0 +1,7 @@
+{
+  "id": "okf-enforcer",
+  "name": "OKF Enforcer",
+  "author": "MartinForReal",
+  "description": "Validate and enforce the Open Knowledge Format (OKF v0.1) in your vault.",
+  "repo": "MartinForReal/okf-enforcer"
+}

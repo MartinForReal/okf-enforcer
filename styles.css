@@ -1,0 +1,197 @@
+/* OKF Enforcer — compact report styles */
+
+.okf-report {
+  padding: 6px 8px 16px 8px;
+  font-size: var(--font-ui-smaller);
+}
+
+.okf-toolbar {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.okf-toolbar button {
+  cursor: pointer;
+  padding: 2px 8px;
+  font-size: var(--font-ui-smaller);
+}
+
+.okf-summary {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.okf-chip {
+  border-radius: 4px;
+  padding: 0 6px;
+  font-weight: 600;
+  font-size: var(--font-ui-smaller);
+  line-height: 1.6;
+}
+.okf-chip.okf-pass {
+  background: var(--background-modifier-success);
+  color: var(--text-normal);
+}
+.okf-chip.okf-error {
+  background: var(--background-modifier-error);
+  color: var(--text-on-accent);
+}
+.okf-chip.okf-warn {
+  background: var(--background-modifier-border);
+  color: var(--text-normal);
+}
+
+.okf-empty {
+  color: var(--text-muted);
+  padding: 8px 2px;
+}
+
+.okf-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.okf-file-block {
+  border-radius: 4px;
+}
+.okf-file-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  cursor: pointer;
+  border-radius: 4px;
+  line-height: 1.5;
+}
+.okf-file-head:hover {
+  background: var(--background-modifier-hover);
+}
+.okf-caret {
+  width: 10px;
+  color: var(--text-muted);
+  flex: 0 0 auto;
+}
+.okf-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+.okf-dot.error {
+  background: var(--text-error);
+}
+.okf-dot.warning {
+  background: var(--text-warning);
+}
+.okf-file-name {
+  flex: 1 1 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.okf-count {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  background: var(--background-modifier-border);
+  border-radius: 8px;
+  padding: 0 6px;
+  font-size: var(--font-ui-smaller);
+}
+
+.okf-issues {
+  padding: 2px 4px 4px 26px;
+}
+.okf-issue {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  margin-top: 2px;
+  line-height: 1.35;
+}
+.okf-sev {
+  flex: 0 0 auto;
+}
+.okf-sev.error {
+  color: var(--text-error);
+}
+.okf-sev.warning {
+  color: var(--text-warning);
+}
+.okf-issue-text {
+  color: var(--text-normal);
+}
+.okf-rule {
+  color: var(--text-muted);
+}
+.okf-fixable {
+  color: var(--text-accent);
+}
+.okf-open-link {
+  display: inline-block;
+  margin: 4px 0 2px 26px;
+  font-size: var(--font-ui-smaller);
+  cursor: pointer;
+}
+
+.okf-statusbar-ok {
+  color: var(--text-success);
+}
+.okf-statusbar-bad {
+  color: var(--text-error);
+}
+.okf-statusbar-warn {
+  color: var(--text-warning);
+}
+
+/* progress bar */
+.okf-progress {
+  margin: 4px 0 8px 0;
+}
+.okf-progress.is-hidden {
+  display: none;
+}
+.okf-progress-track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--background-modifier-border);
+  overflow: hidden;
+}
+.okf-progress-bar {
+  height: 100%;
+  width: 0%;
+  background: var(--interactive-accent);
+  transition: width 0.15s ease;
+}
+.okf-progress-label {
+  margin-top: 3px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+
+/* prompt modal */
+.okf-modal-field {
+  margin: 10px 0;
+}
+.okf-modal-field label {
+  display: block;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  margin-bottom: 3px;
+}
+.okf-modal-field input {
+  width: 100%;
+}
+.okf-modal-issues {
+  margin: 8px 0;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--background-secondary);
+  font-size: var(--font-ui-smaller);
+}
+.okf-modal-buttons {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 14px;
+}

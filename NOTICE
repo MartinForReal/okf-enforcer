@@ -1,0 +1,8 @@
+OKF Enforcer
+Copyright 2026 MartinForReal
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product implements the Open Knowledge Format (OKF) specification by
+Google Cloud Platform:
+https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md
