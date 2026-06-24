@@ -35,8 +35,13 @@ export default class OkfPlugin extends Plugin {
   private pendingResults: { results: FileResult[]; scanned: number } | null =
     null;
 
-  async onload() {
-    await this.loadSettings();
+  onload() {
+    // Start from defaults synchronously so onload returns void (the type
+    // Obsidian's Plugin base class expects), then load persisted settings in
+    // the background. Event/command handlers read this.settings lazily, so
+    // they pick up the loaded values once the async load resolves.
+    this.settings = { ...DEFAULT_SETTINGS };
+    void this.loadSettings();
 
     this.registerView(OKF_VIEW_TYPE, (leaf) => new OkfReportView(leaf, this));
 

@@ -483,8 +483,9 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
       true
     );
   }
-  async onload() {
-    await this.loadSettings();
+  onload() {
+    this.settings = { ...DEFAULT_SETTINGS };
+    void this.loadSettings();
     this.registerView(OKF_VIEW_TYPE, (leaf) => new OkfReportView(leaf, this));
     this.statusEl = this.addStatusBarItem();
     this.statusEl.setText("OKF: \u2014");
