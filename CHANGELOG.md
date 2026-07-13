@@ -4,6 +4,29 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-07-13
+
+### Added
+- **Portent validation** (opt-in). A new **Enable Portent validation** setting
+  layers the [Portent](https://portent.md) spec on top of OKF: it checks the
+  default type vocabulary (`Project`, `Operation`, `Responsibility`, `Task`,
+  `Event`, `Note`, `Topic`, `Person`), lifecycle metadata (`status:
+  captured|organized|archived`, or boolean `organized`/`archived`), and
+  relationship shape (`belongs_to` single wikilink, `related_to` list of
+  wikilinks). All Portent findings are warnings and never affect OKF
+  conformance. Disabled by default.
+
+### Removed
+- Stray `RELEASE-NOTES-0.1.0.md` from the repository root; release history now
+  lives solely in this changelog.
+
+### Fixed
+- Clearer validation error when `type` is a list or other non-string value. The
+  report now states that OKF §4.1 requires `type` to be a single string
+  (previously it was mislabeled as "present but empty"), and the insert-a-value
+  quick-fix is no longer offered for a malformed non-string `type` so existing
+  data is never silently discarded.
+
 ## [0.1.3] - 2026-06-24
 
 ### Changed

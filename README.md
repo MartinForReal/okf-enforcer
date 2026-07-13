@@ -45,6 +45,7 @@ Configure under **Settings → OKF Enforcer**:
 - **Batch size** — files processed per async chunk (lower = smoother UI on very large vaults).
 - **Warn on missing recommended fields / tags**, **Check reserved files** — which warnings to surface.
 - **Excluded folders** — paths skipped during validation (defaults: `.obsidian`, `Templates`, `.trash`).
+- **Enable Portent validation** — layer the [Portent](https://portent.md) spec on top of OKF: default type vocabulary (`Project`, `Operation`, `Responsibility`, `Task`, `Event`, `Note`, `Topic`, `Person`), lifecycle metadata (`status: captured|organized|archived` or boolean `organized`/`archived`), and relationship shape (`belongs_to` single wikilink, `related_to` list of wikilinks). All Portent findings are warnings — they never break OKF conformance.
 
 ## Installation
 

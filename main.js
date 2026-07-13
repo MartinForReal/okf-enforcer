@@ -37,8 +37,21 @@ var DEFAULT_SETTINGS = {
   fixOnSave: true,
   autoGenerateIndex: true,
   batchSize: 50,
-  excludeFolders: ["Templates"]
+  excludeFolders: ["Templates"],
+  enablePortent: false
 };
+var PORTENT_TYPES = [
+  "Project",
+  "Operation",
+  "Responsibility",
+  "Task",
+  "Event",
+  "Note",
+  "Topic",
+  "Person"
+];
+var PORTENT_STATUSES = ["captured", "organized", "archived"];
+var WIKILINK_RE = /^\[\[[^[\]]+?\]\]$/;
 var FM_RE = /^---\r?\n([\s\S]*?)\r?\n---/;
 var ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 function basename(path) {
@@ -96,12 +109,22 @@ function validateConcept(path, content, settings) {
   const type = data["type"];
   const typeOk = typeof type === "string" && type.trim().length > 0;
   if (!typeOk) {
-    issues.push({
+    const issue = {
       severity: "error",
       rule: "\xA79.2",
-      message: type === void 0 ? "Missing required `type` field." : "`type` field is present but empty. It must be a non-empty string.",
-      fix: "add-type"
-    });
+      message: "`type` field is present but empty. It must be a non-empty string."
+    };
+    if (type === void 0) {
+      issue.message = "Missing required `type` field.";
+      issue.fix = "add-type";
+    } else if (Array.isArray(type)) {
+      issue.message = "`type` must be a single string, not a list (OKF \xA74.1 \u2014 only `tags` is list-valued).";
+    } else if (typeof type !== "string") {
+      issue.message = "`type` must be a non-empty string (OKF \xA74.1).";
+    } else {
+      issue.fix = "add-type";
+    }
+    issues.push(issue);
   }
   if (settings.warnRecommendedFields) {
     if (!hasNonEmpty(data, "title")) {
@@ -140,6 +163,106 @@ function validateConcept(path, content, settings) {
       rule: "\xA74.1",
       message: "Recommended `tags` list missing."
     });
+  }
+  if (settings.enablePortent) {
+    issues.push(...validatePortent(data));
+  }
+  return issues;
+}
+function validatePortent(data) {
+  const issues = [];
+  const type = data["type"];
+  if (typeof type === "string" && type.trim().length > 0) {
+    const t = type.trim();
+    if (!PORTENT_TYPES.includes(t)) {
+      issues.push({
+        severity: "warning",
+        rule: "portent/types",
+        message: `\`type: ${t}\` is not one of Portent's default types (${PORTENT_TYPES.join(
+          ", "
+        )}). Extend intentionally or switch to a default.`
+      });
+    }
+  }
+  const hasOrganized = "organized" in data;
+  const hasArchived = "archived" in data;
+  const hasStatus = "status" in data;
+  if (!hasOrganized && !hasArchived && !hasStatus) {
+    issues.push({
+      severity: "warning",
+      rule: "portent/lifecycle",
+      message: "Portent lifecycle metadata missing. Add `status: captured|organized|archived`, or boolean `organized`/`archived` fields."
+    });
+  } else {
+    if (hasStatus) {
+      const s = data["status"];
+      if (typeof s !== "string" || !PORTENT_STATUSES.includes(s.trim())) {
+        issues.push({
+          severity: "warning",
+          rule: "portent/lifecycle",
+          message: `\`status\` must be one of ${PORTENT_STATUSES.join(
+            " | "
+          )}.`
+        });
+      }
+    }
+    if (hasOrganized && typeof data["organized"] !== "boolean") {
+      issues.push({
+        severity: "warning",
+        rule: "portent/lifecycle",
+        message: "`organized` should be a boolean (true/false)."
+      });
+    }
+    if (hasArchived && typeof data["archived"] !== "boolean") {
+      issues.push({
+        severity: "warning",
+        rule: "portent/lifecycle",
+        message: "`archived` should be a boolean (true/false)."
+      });
+    }
+  }
+  if ("belongs_to" in data) {
+    const bt = data["belongs_to"];
+    if (bt !== null && bt !== void 0) {
+      if (typeof bt === "string") {
+        if (!WIKILINK_RE.test(bt.trim())) {
+          issues.push({
+            severity: "warning",
+            rule: "portent/relationships",
+            message: '`belongs_to` should be a single wikilink like `"[[Parent Note]]"`.'
+          });
+        }
+      } else {
+        issues.push({
+          severity: "warning",
+          rule: "portent/relationships",
+          message: "`belongs_to` denotes a single primary parent \u2014 expected one wikilink string, not a list or object."
+        });
+      }
+    }
+  }
+  if ("related_to" in data) {
+    const rt = data["related_to"];
+    if (rt !== null && rt !== void 0) {
+      if (!Array.isArray(rt)) {
+        issues.push({
+          severity: "warning",
+          rule: "portent/relationships",
+          message: "`related_to` should be a YAML list of wikilinks (may be empty)."
+        });
+      } else {
+        const bad = rt.filter(
+          (v) => typeof v !== "string" || !WIKILINK_RE.test(v.trim())
+        );
+        if (bad.length > 0) {
+          issues.push({
+            severity: "warning",
+            rule: "portent/relationships",
+            message: `\`related_to\` entries should be wikilinks like \`"[[Other Note]]"\` (${bad.length} entr${bad.length === 1 ? "y is" : "ies are"} not).`
+          });
+        }
+      }
+    }
   }
   return issues;
 }
@@ -220,9 +343,12 @@ function validateLog(content, settings) {
       message: "`log.md` is not expected to contain frontmatter."
     });
   }
-  const h2s = [...content.matchAll(/^##\s+(.+?)\s*$/gm)].map(
-    (m) => m[1].trim()
-  );
+  const h2s = [];
+  const h2Re = /^##\s+(.+?)\s*$/gm;
+  let h2Match;
+  while ((h2Match = h2Re.exec(content)) !== null) {
+    h2s.push(h2Match[1].trim());
+  }
   if (h2s.length === 0) {
     issues.push({
       severity: "warning",
@@ -1116,6 +1242,15 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
     new import_obsidian3.Setting(containerEl).setName("Excluded folders").setDesc("Comma-separated paths skipped during validation.").addText(
       (t) => t.setValue(this.plugin.settings.excludeFolders.join(", ")).onChange(async (v) => {
         this.plugin.settings.excludeFolders = v.split(",").map((s) => s.trim()).filter(Boolean);
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian3.Setting(containerEl).setName("Portent").setHeading();
+    new import_obsidian3.Setting(containerEl).setName("Enable Portent validation").setDesc(
+      "Additionally validate notes against the Portent spec (portent.md): default type vocabulary (Project, Operation, Responsibility, Task, Event, Note, Topic, Person), lifecycle metadata (status / organized / archived), and relationship shape (belongs_to, related_to as wikilinks). All Portent findings are warnings \u2014 they never block OKF conformance."
+    ).addToggle(
+      (tg) => tg.setValue(this.plugin.settings.enablePortent).onChange(async (v) => {
+        this.plugin.settings.enablePortent = v;
         await this.plugin.saveSettings();
       })
     );

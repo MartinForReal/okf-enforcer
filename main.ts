@@ -805,6 +805,22 @@ class OkfSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
+
+    new Setting(containerEl).setName("Portent").setHeading();
+
+    new Setting(containerEl)
+      .setName("Enable Portent validation")
+      .setDesc(
+        "Additionally validate notes against the Portent spec (portent.md): default type vocabulary (Project, Operation, Responsibility, Task, Event, Note, Topic, Person), lifecycle metadata (status / organized / archived), and relationship shape (belongs_to, related_to as wikilinks). All Portent findings are warnings — they never block OKF conformance."
+      )
+      .addToggle((tg) =>
+        tg
+          .setValue(this.plugin.settings.enablePortent)
+          .onChange(async (v) => {
+            this.plugin.settings.enablePortent = v;
+            await this.plugin.saveSettings();
+          })
+      );
   }
 }
 
