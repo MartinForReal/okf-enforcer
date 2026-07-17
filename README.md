@@ -18,6 +18,7 @@ OKF is an open, minimal convention for representing knowledge as a directory of 
 - **On-save & on-create hooks.** New notes, edited notes, and notes added by the **Importer** plugin are brought into conformance automatically.
 - **`index.md` generation.** Builds and refreshes OKF §6 directory listings so each folder is self-describing.
 - **`log.md` entries.** Adds dated §7 changelog entries.
+- **Portent layer (opt-in, beta).** Optionally layer the [Portent](https://portent.md) knowledge-base spec on top of OKF — type vocabulary, lifecycle, and `belongs_to`/`related_to` relationships — surfaced as non-blocking warnings. The schema is fully free-form: rename fields (e.g. `status` → `state`), redefine the accepted vocabularies, and toggle each check independently, so you can match your own conventions or track the evolving pre-1.0 spec.
 - **Large-vault friendly.** Scans and fixes run through a batched, non-blocking queue with an inline progress bar — the UI never freezes.
 
 ## Usage
@@ -44,7 +45,7 @@ Configure under **Settings → OKF Enforcer**:
 - **Live check on save / open**, **Scan vault on startup**, **Fix format issues on save**, **Auto-generate index.md** — automation toggles.
 - **Batch size** — files processed per async chunk (lower = smoother UI on very large vaults).
 - **Warn on missing recommended fields / tags**, **Check reserved files** — which warnings to surface.
-- **Excluded folders** — paths skipped during validation (defaults: `.obsidian`, `Templates`, `.trash`).
+- **Excluded folders** — paths skipped during validation (default: `Templates`). The Obsidian config folder (e.g. `.obsidian`) is always skipped automatically.
 - **Enable Portent validation** _(experimental / beta — the Portent spec is pre-1.0 and may change)_ — layer the [Portent](https://portent.md) spec on top of OKF: default type vocabulary (`Project`, `Operation`, `Responsibility`, `Task`, `Event`, `Note`, `Topic`, `Person`), lifecycle metadata (optional and format-free — a single `status`/`state` value, boolean `organized`/`archived`, or omitted entirely when organized by default), and relationship shape (`belongs_to` single wikilink, `related_to` list of wikilinks). All Portent findings are warnings — they never break OKF conformance.
 - **Portent schema** — with Portent validation enabled, every property name and vocabulary is free-form. Remap each concept onto your vault's own frontmatter keys (e.g. rename the lifecycle field `status` → `state`) and set the accepted `type` and status values, so you can follow your own conventions or a future spec revision without waiting for a plugin update. Leave any field blank to restore its default. Each optional check — type vocabulary, lifecycle, `belongs_to`, and `related_to` — can be toggled on or off individually.
 
