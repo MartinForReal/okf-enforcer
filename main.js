@@ -533,11 +533,11 @@ var OkfReportView = class extends import_obsidian2.ItemView {
     summary.createSpan({ cls: "okf-chip okf-error", text: `\u2716 ${errorFiles}` });
     summary.createSpan({ cls: "okf-chip okf-warn", text: `\u26A0 ${warnFiles}` });
     if (this.scanned === 0) {
-      b.createEl("div", { cls: "okf-empty", text: "No scan yet \u2014 click Rescan." });
+      b.createDiv({ cls: "okf-empty", text: "No scan yet \u2014 click Rescan." });
       return;
     }
     if (this.results.length === 0) {
-      b.createEl("div", { cls: "okf-empty", text: "\u2713 All notes conform." });
+      b.createDiv({ cls: "okf-empty", text: "\u2713 All notes conform." });
       return;
     }
     const sorted = [...this.results].sort((a, b2) => {

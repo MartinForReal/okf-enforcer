@@ -115,11 +115,11 @@ export class OkfReportView extends ItemView {
     summary.createSpan({ cls: "okf-chip okf-warn", text: `⚠ ${warnFiles}` });
 
     if (this.scanned === 0) {
-      b.createEl("div", { cls: "okf-empty", text: "No scan yet — click Rescan." });
+      b.createDiv({ cls: "okf-empty", text: "No scan yet — click Rescan." });
       return;
     }
     if (this.results.length === 0) {
-      b.createEl("div", { cls: "okf-empty", text: "✓ All notes conform." });
+      b.createDiv({ cls: "okf-empty", text: "✓ All notes conform." });
       return;
     }
 
