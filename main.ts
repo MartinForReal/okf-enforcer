@@ -690,7 +690,10 @@ type OkfSettingSpec = {
   desc?: string;
   heading?: boolean;
   portentDependent?: boolean;
-  control?: (row: Setting) => void;
+  // Returns the chained Setting (not void) so the builder can stay a terse
+  // expression body; typing it `unknown` keeps no-misused-promises' void-return
+  // check from firing on the control property.
+  control?: (row: Setting) => unknown;
 };
 
 class OkfSettingTab extends PluginSettingTab {
