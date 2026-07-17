@@ -51,6 +51,8 @@ Configure under **Settings → OKF Enforcer**:
 
 ## Installation
 
+Requires **Obsidian 1.7.2 or newer**.
+
 ### From the Community Plugins browser
 Once accepted: **Settings → Community plugins → Browse**, search for "OKF Enforcer", install, and enable.
 
