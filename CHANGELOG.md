@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Settings → OKF Enforcer → Portent, so you only validate the optional fields
   your vault uses. These and the schema fields are grayed out and disabled until
   **Enable Portent validation** is on.
+- **Settings searchable on Obsidian 1.13+.** The settings tab now implements the
+  declarative `getSettingDefinitions()` API, so every setting is indexed by
+  Obsidian's global settings search on 1.13.0+. The imperative `display()` is
+  kept as the fallback for older versions (dual-support); both render from one
+  shared definition list so they can't drift. `minAppVersion` stays 1.4.0.
 
 ### Fixed
 - **Lifecycle metadata is now format-free.** Per the Portent spec ("Use any
