@@ -1162,7 +1162,7 @@ ${entry}
       await (leaf == null ? void 0 : leaf.setViewState({ type: OKF_VIEW_TYPE, active: true }));
     }
     if (leaf) {
-      this.app.workspace.revealLeaf(leaf);
+      void this.app.workspace.revealLeaf(leaf);
       if (this.pendingResults && leaf.view instanceof OkfReportView) {
         leaf.view.setResults(
           this.pendingResults.results,
@@ -1185,16 +1185,16 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
    */
   settingSpecs() {
     const s = this.plugin.settings;
-    const save = () => this.plugin.saveSettings();
+    const save = () => void this.plugin.saveSettings();
     const list = (v) => v.split(",").map((x) => x.trim()).filter(Boolean);
     return [
       {
         name: "Default type for auto-fix",
         desc: "Value inserted into `type` when fixing notes that lack it.",
         control: (row) => row.addText(
-          (t) => t.setValue(s.defaultType).onChange(async (v) => {
+          (t) => t.setValue(s.defaultType).onChange((v) => {
             s.defaultType = v || "Concept";
-            await save();
+            save();
           })
         )
       },
@@ -1202,9 +1202,9 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
         name: "Live check on save / open",
         desc: "Validate the active note as you edit and when you open it.",
         control: (row) => row.addToggle(
-          (tg) => tg.setValue(s.liveCheckOnSave).onChange(async (v) => {
+          (tg) => tg.setValue(s.liveCheckOnSave).onChange((v) => {
             s.liveCheckOnSave = v;
-            await save();
+            save();
           })
         )
       },
@@ -1213,9 +1213,9 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
         name: "Scan vault on startup",
         desc: "Run a full conformance scan automatically when the plugin loads (deferred until the workspace is ready).",
         control: (row) => row.addToggle(
-          (tg) => tg.setValue(s.scanOnStartup).onChange(async (v) => {
+          (tg) => tg.setValue(s.scanOnStartup).onChange((v) => {
             s.scanOnStartup = v;
-            await save();
+            save();
           })
         )
       },
@@ -1223,9 +1223,9 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
         name: "Fix format issues on save",
         desc: "When you edit a note, auto-insert missing OKF frontmatter (type/title/timestamp). Non-destructive; never overwrites existing values.",
         control: (row) => row.addToggle(
-          (tg) => tg.setValue(s.fixOnSave).onChange(async (v) => {
+          (tg) => tg.setValue(s.fixOnSave).onChange((v) => {
             s.fixOnSave = v;
-            await save();
+            save();
           })
         )
       },
@@ -1233,9 +1233,9 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
         name: "Auto-generate index.md",
         desc: "Regenerate a folder's index.md (\xA76 listing) automatically when its notes change.",
         control: (row) => row.addToggle(
-          (tg) => tg.setValue(s.autoGenerateIndex).onChange(async (v) => {
+          (tg) => tg.setValue(s.autoGenerateIndex).onChange((v) => {
             s.autoGenerateIndex = v;
-            await save();
+            save();
           })
         )
       },
@@ -1243,10 +1243,10 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
         name: "Batch size",
         desc: "Files processed per async chunk during scan/fix. Lower = smoother UI on large vaults; higher = faster.",
         control: (row) => row.addText(
-          (t) => t.setValue(String(s.batchSize)).onChange(async (v) => {
+          (t) => t.setValue(String(s.batchSize)).onChange((v) => {
             const n = parseInt(v, 10);
             s.batchSize = isNaN(n) || n < 1 ? 50 : Math.min(n, 1e3);
-            await save();
+            save();
           })
         )
       },
@@ -1255,18 +1255,18 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
         name: "Warn on missing recommended fields",
         desc: "title, description, timestamp (\xA74.1).",
         control: (row) => row.addToggle(
-          (tg) => tg.setValue(s.warnRecommendedFields).onChange(async (v) => {
+          (tg) => tg.setValue(s.warnRecommendedFields).onChange((v) => {
             s.warnRecommendedFields = v;
-            await save();
+            save();
           })
         )
       },
       {
         name: "Warn on missing tags",
         control: (row) => row.addToggle(
-          (tg) => tg.setValue(s.warnTagsField).onChange(async (v) => {
+          (tg) => tg.setValue(s.warnTagsField).onChange((v) => {
             s.warnTagsField = v;
-            await save();
+            save();
           })
         )
       },
@@ -1274,9 +1274,9 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
         name: "Check reserved files (index.md / log.md)",
         desc: "Validate \xA76 and \xA77 structure.",
         control: (row) => row.addToggle(
-          (tg) => tg.setValue(s.checkReservedFiles).onChange(async (v) => {
+          (tg) => tg.setValue(s.checkReservedFiles).onChange((v) => {
             s.checkReservedFiles = v;
-            await save();
+            save();
           })
         )
       },
@@ -1284,9 +1284,9 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
         name: "Excluded folders",
         desc: "Comma-separated paths skipped during validation.",
         control: (row) => row.addText(
-          (t) => t.setValue(s.excludeFolders.join(", ")).onChange(async (v) => {
+          (t) => t.setValue(s.excludeFolders.join(", ")).onChange((v) => {
             s.excludeFolders = list(v);
-            await save();
+            save();
           })
         )
       },
@@ -1295,9 +1295,9 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
         name: "Enable Portent validation",
         desc: "Experimental (beta) \u2014 the Portent spec is pre-1.0 and may still change. Additionally validate notes against the Portent spec (portent.md): default type vocabulary (Project, Operation, Responsibility, Task, Event, Note, Topic, Person), lifecycle metadata (optional and format-free; status / organized / archived, or omitted when organized by default), and relationship shape (belongs_to, related_to as wikilinks). All Portent findings are warnings \u2014 they never block OKF conformance.",
         control: (row) => row.addToggle(
-          (tg) => tg.setValue(s.enablePortent).onChange(async (v) => {
+          (tg) => tg.setValue(s.enablePortent).onChange((v) => {
             s.enablePortent = v;
-            await save();
+            save();
             this.refresh();
           })
         )
@@ -1307,9 +1307,9 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
         desc: "Warn when `type` is not one of the configured Portent types. Turn off if you use your own type names.",
         portentDependent: true,
         control: (row) => row.addToggle(
-          (tg) => tg.setValue(s.portentCheckTypeVocab).onChange(async (v) => {
+          (tg) => tg.setValue(s.portentCheckTypeVocab).onChange((v) => {
             s.portentCheckTypeVocab = v;
-            await save();
+            save();
           })
         )
       },
@@ -1318,9 +1318,9 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
         desc: "Check lifecycle values when present (status maps to the configured set; `organized`/`archived` are booleans). A missing lifecycle is never flagged.",
         portentDependent: true,
         control: (row) => row.addToggle(
-          (tg) => tg.setValue(s.portentCheckLifecycle).onChange(async (v) => {
+          (tg) => tg.setValue(s.portentCheckLifecycle).onChange((v) => {
             s.portentCheckLifecycle = v;
-            await save();
+            save();
           })
         )
       },
@@ -1329,9 +1329,9 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
         desc: "Check `belongs_to` shape when present (a single wikilink to the primary parent).",
         portentDependent: true,
         control: (row) => row.addToggle(
-          (tg) => tg.setValue(s.portentCheckBelongsTo).onChange(async (v) => {
+          (tg) => tg.setValue(s.portentCheckBelongsTo).onChange((v) => {
             s.portentCheckBelongsTo = v;
-            await save();
+            save();
           })
         )
       },
@@ -1340,9 +1340,9 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
         desc: "Check `related_to` shape when present (a list of wikilinks).",
         portentDependent: true,
         control: (row) => row.addToggle(
-          (tg) => tg.setValue(s.portentCheckRelatedTo).onChange(async (v) => {
+          (tg) => tg.setValue(s.portentCheckRelatedTo).onChange((v) => {
             s.portentCheckRelatedTo = v;
-            await save();
+            save();
           })
         )
       },
@@ -1357,10 +1357,10 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
         desc: "Comma-separated accepted `type` values.",
         portentDependent: true,
         control: (row) => row.addText(
-          (t) => t.setValue(s.portentTypes.join(", ")).onChange(async (v) => {
+          (t) => t.setValue(s.portentTypes.join(", ")).onChange((v) => {
             const l = list(v);
             s.portentTypes = l.length ? l : [...PORTENT_TYPES];
-            await save();
+            save();
           })
         )
       },
@@ -1369,9 +1369,9 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
         desc: "Frontmatter key holding the single lifecycle value (default `status`; e.g. rename to `state`).",
         portentDependent: true,
         control: (row) => row.addText(
-          (t) => t.setValue(s.portentStatusField).onChange(async (v) => {
+          (t) => t.setValue(s.portentStatusField).onChange((v) => {
             s.portentStatusField = v.trim() || "status";
-            await save();
+            save();
           })
         )
       },
@@ -1380,10 +1380,10 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
         desc: "Comma-separated accepted values for the status field.",
         portentDependent: true,
         control: (row) => row.addText(
-          (t) => t.setValue(s.portentStatuses.join(", ")).onChange(async (v) => {
+          (t) => t.setValue(s.portentStatuses.join(", ")).onChange((v) => {
             const l = list(v);
             s.portentStatuses = l.length ? l : [...PORTENT_STATUSES];
-            await save();
+            save();
           })
         )
       },
@@ -1392,9 +1392,9 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
         desc: "Frontmatter key for the boolean `organized` lifecycle flag.",
         portentDependent: true,
         control: (row) => row.addText(
-          (t) => t.setValue(s.portentOrganizedField).onChange(async (v) => {
+          (t) => t.setValue(s.portentOrganizedField).onChange((v) => {
             s.portentOrganizedField = v.trim() || "organized";
-            await save();
+            save();
           })
         )
       },
@@ -1403,9 +1403,9 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
         desc: "Frontmatter key for the boolean `archived` lifecycle flag.",
         portentDependent: true,
         control: (row) => row.addText(
-          (t) => t.setValue(s.portentArchivedField).onChange(async (v) => {
+          (t) => t.setValue(s.portentArchivedField).onChange((v) => {
             s.portentArchivedField = v.trim() || "archived";
-            await save();
+            save();
           })
         )
       },
@@ -1414,9 +1414,9 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
         desc: "Frontmatter key for the single-parent relationship (a wikilink).",
         portentDependent: true,
         control: (row) => row.addText(
-          (t) => t.setValue(s.portentBelongsToField).onChange(async (v) => {
+          (t) => t.setValue(s.portentBelongsToField).onChange((v) => {
             s.portentBelongsToField = v.trim() || "belongs_to";
-            await save();
+            save();
           })
         )
       },
@@ -1425,9 +1425,9 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
         desc: "Frontmatter key for the related-notes relationship (a list of wikilinks).",
         portentDependent: true,
         control: (row) => row.addText(
-          (t) => t.setValue(s.portentRelatedToField).onChange(async (v) => {
+          (t) => t.setValue(s.portentRelatedToField).onChange((v) => {
             s.portentRelatedToField = v.trim() || "related_to";
-            await save();
+            save();
           })
         )
       }
@@ -1447,7 +1447,8 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       row.setDisabled(true);
     }
   }
-  /** Imperative rendering — used by Obsidian < 1.13. */
+  /** Imperative rendering — Obsidian < 1.13's sanctioned dual-support fallback. */
+  // eslint-disable-next-line @typescript-eslint/no-deprecated
   display() {
     const { containerEl } = this;
     containerEl.empty();

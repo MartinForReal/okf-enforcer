@@ -661,7 +661,7 @@ export default class OkfPlugin extends Plugin {
       await leaf?.setViewState({ type: OKF_VIEW_TYPE, active: true });
     }
     if (leaf) {
-      this.app.workspace.revealLeaf(leaf);
+      void this.app.workspace.revealLeaf(leaf);
       if (this.pendingResults && leaf.view instanceof OkfReportView) {
         leaf.view.setResults(
           this.pendingResults.results,
@@ -695,7 +695,7 @@ class OkfSettingTab extends PluginSettingTab {
    */
   private settingSpecs(): OkfSettingSpec[] {
     const s = this.plugin.settings;
-    const save = () => this.plugin.saveSettings();
+    const save = () => void this.plugin.saveSettings();
     const list = (v: string) =>
       v
         .split(",")
@@ -707,9 +707,9 @@ class OkfSettingTab extends PluginSettingTab {
         desc: "Value inserted into `type` when fixing notes that lack it.",
         control: (row) =>
           row.addText((t) =>
-            t.setValue(s.defaultType).onChange(async (v) => {
+            t.setValue(s.defaultType).onChange((v) => {
               s.defaultType = v || "Concept";
-              await save();
+              save();
             })
           ),
       },
@@ -718,9 +718,9 @@ class OkfSettingTab extends PluginSettingTab {
         desc: "Validate the active note as you edit and when you open it.",
         control: (row) =>
           row.addToggle((tg) =>
-            tg.setValue(s.liveCheckOnSave).onChange(async (v) => {
+            tg.setValue(s.liveCheckOnSave).onChange((v) => {
               s.liveCheckOnSave = v;
-              await save();
+              save();
             })
           ),
       },
@@ -730,9 +730,9 @@ class OkfSettingTab extends PluginSettingTab {
         desc: "Run a full conformance scan automatically when the plugin loads (deferred until the workspace is ready).",
         control: (row) =>
           row.addToggle((tg) =>
-            tg.setValue(s.scanOnStartup).onChange(async (v) => {
+            tg.setValue(s.scanOnStartup).onChange((v) => {
               s.scanOnStartup = v;
-              await save();
+              save();
             })
           ),
       },
@@ -741,9 +741,9 @@ class OkfSettingTab extends PluginSettingTab {
         desc: "When you edit a note, auto-insert missing OKF frontmatter (type/title/timestamp). Non-destructive; never overwrites existing values.",
         control: (row) =>
           row.addToggle((tg) =>
-            tg.setValue(s.fixOnSave).onChange(async (v) => {
+            tg.setValue(s.fixOnSave).onChange((v) => {
               s.fixOnSave = v;
-              await save();
+              save();
             })
           ),
       },
@@ -752,9 +752,9 @@ class OkfSettingTab extends PluginSettingTab {
         desc: "Regenerate a folder's index.md (§6 listing) automatically when its notes change.",
         control: (row) =>
           row.addToggle((tg) =>
-            tg.setValue(s.autoGenerateIndex).onChange(async (v) => {
+            tg.setValue(s.autoGenerateIndex).onChange((v) => {
               s.autoGenerateIndex = v;
-              await save();
+              save();
             })
           ),
       },
@@ -763,10 +763,10 @@ class OkfSettingTab extends PluginSettingTab {
         desc: "Files processed per async chunk during scan/fix. Lower = smoother UI on large vaults; higher = faster.",
         control: (row) =>
           row.addText((t) =>
-            t.setValue(String(s.batchSize)).onChange(async (v) => {
+            t.setValue(String(s.batchSize)).onChange((v) => {
               const n = parseInt(v, 10);
               s.batchSize = isNaN(n) || n < 1 ? 50 : Math.min(n, 1000);
-              await save();
+              save();
             })
           ),
       },
@@ -776,9 +776,9 @@ class OkfSettingTab extends PluginSettingTab {
         desc: "title, description, timestamp (§4.1).",
         control: (row) =>
           row.addToggle((tg) =>
-            tg.setValue(s.warnRecommendedFields).onChange(async (v) => {
+            tg.setValue(s.warnRecommendedFields).onChange((v) => {
               s.warnRecommendedFields = v;
-              await save();
+              save();
             })
           ),
       },
@@ -786,9 +786,9 @@ class OkfSettingTab extends PluginSettingTab {
         name: "Warn on missing tags",
         control: (row) =>
           row.addToggle((tg) =>
-            tg.setValue(s.warnTagsField).onChange(async (v) => {
+            tg.setValue(s.warnTagsField).onChange((v) => {
               s.warnTagsField = v;
-              await save();
+              save();
             })
           ),
       },
@@ -797,9 +797,9 @@ class OkfSettingTab extends PluginSettingTab {
         desc: "Validate §6 and §7 structure.",
         control: (row) =>
           row.addToggle((tg) =>
-            tg.setValue(s.checkReservedFiles).onChange(async (v) => {
+            tg.setValue(s.checkReservedFiles).onChange((v) => {
               s.checkReservedFiles = v;
-              await save();
+              save();
             })
           ),
       },
@@ -808,9 +808,9 @@ class OkfSettingTab extends PluginSettingTab {
         desc: "Comma-separated paths skipped during validation.",
         control: (row) =>
           row.addText((t) =>
-            t.setValue(s.excludeFolders.join(", ")).onChange(async (v) => {
+            t.setValue(s.excludeFolders.join(", ")).onChange((v) => {
               s.excludeFolders = list(v);
-              await save();
+              save();
             })
           ),
       },
@@ -820,9 +820,9 @@ class OkfSettingTab extends PluginSettingTab {
         desc: "Experimental (beta) — the Portent spec is pre-1.0 and may still change. Additionally validate notes against the Portent spec (portent.md): default type vocabulary (Project, Operation, Responsibility, Task, Event, Note, Topic, Person), lifecycle metadata (optional and format-free; status / organized / archived, or omitted when organized by default), and relationship shape (belongs_to, related_to as wikilinks). All Portent findings are warnings — they never block OKF conformance.",
         control: (row) =>
           row.addToggle((tg) =>
-            tg.setValue(s.enablePortent).onChange(async (v) => {
+            tg.setValue(s.enablePortent).onChange((v) => {
               s.enablePortent = v;
-              await save();
+              save();
               // Re-render so the dependent Portent options enable/disable to match.
               this.refresh();
             })
@@ -834,9 +834,9 @@ class OkfSettingTab extends PluginSettingTab {
         portentDependent: true,
         control: (row) =>
           row.addToggle((tg) =>
-            tg.setValue(s.portentCheckTypeVocab).onChange(async (v) => {
+            tg.setValue(s.portentCheckTypeVocab).onChange((v) => {
               s.portentCheckTypeVocab = v;
-              await save();
+              save();
             })
           ),
       },
@@ -846,9 +846,9 @@ class OkfSettingTab extends PluginSettingTab {
         portentDependent: true,
         control: (row) =>
           row.addToggle((tg) =>
-            tg.setValue(s.portentCheckLifecycle).onChange(async (v) => {
+            tg.setValue(s.portentCheckLifecycle).onChange((v) => {
               s.portentCheckLifecycle = v;
-              await save();
+              save();
             })
           ),
       },
@@ -858,9 +858,9 @@ class OkfSettingTab extends PluginSettingTab {
         portentDependent: true,
         control: (row) =>
           row.addToggle((tg) =>
-            tg.setValue(s.portentCheckBelongsTo).onChange(async (v) => {
+            tg.setValue(s.portentCheckBelongsTo).onChange((v) => {
               s.portentCheckBelongsTo = v;
-              await save();
+              save();
             })
           ),
       },
@@ -870,9 +870,9 @@ class OkfSettingTab extends PluginSettingTab {
         portentDependent: true,
         control: (row) =>
           row.addToggle((tg) =>
-            tg.setValue(s.portentCheckRelatedTo).onChange(async (v) => {
+            tg.setValue(s.portentCheckRelatedTo).onChange((v) => {
               s.portentCheckRelatedTo = v;
-              await save();
+              save();
             })
           ),
       },
@@ -888,10 +888,10 @@ class OkfSettingTab extends PluginSettingTab {
         portentDependent: true,
         control: (row) =>
           row.addText((t) =>
-            t.setValue(s.portentTypes.join(", ")).onChange(async (v) => {
+            t.setValue(s.portentTypes.join(", ")).onChange((v) => {
               const l = list(v);
               s.portentTypes = l.length ? l : [...PORTENT_TYPES];
-              await save();
+              save();
             })
           ),
       },
@@ -901,9 +901,9 @@ class OkfSettingTab extends PluginSettingTab {
         portentDependent: true,
         control: (row) =>
           row.addText((t) =>
-            t.setValue(s.portentStatusField).onChange(async (v) => {
+            t.setValue(s.portentStatusField).onChange((v) => {
               s.portentStatusField = v.trim() || "status";
-              await save();
+              save();
             })
           ),
       },
@@ -913,10 +913,10 @@ class OkfSettingTab extends PluginSettingTab {
         portentDependent: true,
         control: (row) =>
           row.addText((t) =>
-            t.setValue(s.portentStatuses.join(", ")).onChange(async (v) => {
+            t.setValue(s.portentStatuses.join(", ")).onChange((v) => {
               const l = list(v);
               s.portentStatuses = l.length ? l : [...PORTENT_STATUSES];
-              await save();
+              save();
             })
           ),
       },
@@ -926,9 +926,9 @@ class OkfSettingTab extends PluginSettingTab {
         portentDependent: true,
         control: (row) =>
           row.addText((t) =>
-            t.setValue(s.portentOrganizedField).onChange(async (v) => {
+            t.setValue(s.portentOrganizedField).onChange((v) => {
               s.portentOrganizedField = v.trim() || "organized";
-              await save();
+              save();
             })
           ),
       },
@@ -938,9 +938,9 @@ class OkfSettingTab extends PluginSettingTab {
         portentDependent: true,
         control: (row) =>
           row.addText((t) =>
-            t.setValue(s.portentArchivedField).onChange(async (v) => {
+            t.setValue(s.portentArchivedField).onChange((v) => {
               s.portentArchivedField = v.trim() || "archived";
-              await save();
+              save();
             })
           ),
       },
@@ -950,9 +950,9 @@ class OkfSettingTab extends PluginSettingTab {
         portentDependent: true,
         control: (row) =>
           row.addText((t) =>
-            t.setValue(s.portentBelongsToField).onChange(async (v) => {
+            t.setValue(s.portentBelongsToField).onChange((v) => {
               s.portentBelongsToField = v.trim() || "belongs_to";
-              await save();
+              save();
             })
           ),
       },
@@ -962,9 +962,9 @@ class OkfSettingTab extends PluginSettingTab {
         portentDependent: true,
         control: (row) =>
           row.addText((t) =>
-            t.setValue(s.portentRelatedToField).onChange(async (v) => {
+            t.setValue(s.portentRelatedToField).onChange((v) => {
               s.portentRelatedToField = v.trim() || "related_to";
-              await save();
+              save();
             })
           ),
       },
@@ -985,7 +985,8 @@ class OkfSettingTab extends PluginSettingTab {
     }
   }
 
-  /** Imperative rendering — used by Obsidian < 1.13. */
+  /** Imperative rendering — Obsidian < 1.13's sanctioned dual-support fallback. */
+  // eslint-disable-next-line @typescript-eslint/no-deprecated
   display(): void {
     const { containerEl } = this;
     containerEl.empty();

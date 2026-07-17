@@ -29,7 +29,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   declarative `getSettingDefinitions()` API, so every setting is indexed by
   Obsidian's global settings search on 1.13.0+. The imperative `display()` is
   kept as the fallback for older versions (dual-support); both render from one
-  shared definition list so they can't drift. `minAppVersion` stays 1.4.0.
+  shared definition list so they can't drift.
+
+### Changed
+- **Minimum Obsidian version is now 1.7.2** (was 1.4.0). The plugin already
+  relied on APIs newer than the old floor — `fileManager.processFrontMatter`
+  (since 1.4.4) and `workspace.revealLeaf` (since 1.7.2) — so the declared
+  `1.4.0` never actually worked; the manifest now states the true minimum.
 
 ### Fixed
 - **Lifecycle metadata is now format-free.** Per the Portent spec ("Use any
