@@ -10,3 +10,5 @@ data.json
 # handoff artifacts (not part of the published repo)
 okf-enforcer.gitbundle
 PUSH-TO-GITHUB.md
+# local sample/test vault (never published)
+sample-vault/

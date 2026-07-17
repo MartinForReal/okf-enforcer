@@ -20,6 +20,8 @@ import {
   isExcluded,
   basename,
   OkfIssue,
+  PORTENT_TYPES,
+  PORTENT_STATUSES,
 } from "./validator";
 import { OkfReportView, OKF_VIEW_TYPE, FileResult } from "./report-view";
 
@@ -811,13 +813,199 @@ class OkfSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Enable Portent validation")
       .setDesc(
-        "Additionally validate notes against the Portent spec (portent.md): default type vocabulary (Project, Operation, Responsibility, Task, Event, Note, Topic, Person), lifecycle metadata (status / organized / archived), and relationship shape (belongs_to, related_to as wikilinks). All Portent findings are warnings — they never block OKF conformance."
+        "Experimental (beta) — the Portent spec is pre-1.0 and may still change. Additionally validate notes against the Portent spec (portent.md): default type vocabulary (Project, Operation, Responsibility, Task, Event, Note, Topic, Person), lifecycle metadata (optional and format-free; status / organized / archived, or omitted when organized by default), and relationship shape (belongs_to, related_to as wikilinks). All Portent findings are warnings — they never block OKF conformance."
       )
       .addToggle((tg) =>
         tg
           .setValue(this.plugin.settings.enablePortent)
           .onChange(async (v) => {
             this.plugin.settings.enablePortent = v;
+            await this.plugin.saveSettings();
+            // Re-render so the dependent Portent options gray out / enable to match.
+            this.display();
+          })
+      );
+
+    // Everything below depends on Portent being enabled; disable it otherwise.
+    const portentOn = this.plugin.settings.enablePortent;
+
+    new Setting(containerEl)
+      .setDisabled(!portentOn)
+      .setName("Validate type vocabulary")
+      .setDesc(
+        "Warn when `type` is not one of the configured Portent types. Turn off if you use your own type names."
+      )
+      .addToggle((tg) =>
+        tg
+          .setValue(this.plugin.settings.portentCheckTypeVocab)
+          .onChange(async (v) => {
+            this.plugin.settings.portentCheckTypeVocab = v;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setDisabled(!portentOn)
+      .setName("Validate lifecycle")
+      .setDesc(
+        "Check lifecycle values when present (status maps to the configured set; `organized`/`archived` are booleans). A missing lifecycle is never flagged."
+      )
+      .addToggle((tg) =>
+        tg
+          .setValue(this.plugin.settings.portentCheckLifecycle)
+          .onChange(async (v) => {
+            this.plugin.settings.portentCheckLifecycle = v;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setDisabled(!portentOn)
+      .setName("Validate belongs_to")
+      .setDesc(
+        "Check `belongs_to` shape when present (a single wikilink to the primary parent)."
+      )
+      .addToggle((tg) =>
+        tg
+          .setValue(this.plugin.settings.portentCheckBelongsTo)
+          .onChange(async (v) => {
+            this.plugin.settings.portentCheckBelongsTo = v;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setDisabled(!portentOn)
+      .setName("Validate related_to")
+      .setDesc("Check `related_to` shape when present (a list of wikilinks).")
+      .addToggle((tg) =>
+        tg
+          .setValue(this.plugin.settings.portentCheckRelatedTo)
+          .onChange(async (v) => {
+            this.plugin.settings.portentCheckRelatedTo = v;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    // Free-form Portent schema: map each concept onto the vault's own
+    // frontmatter keys and set the accepted vocabularies. Only used when
+    // Portent validation is enabled; blank inputs fall back to the v0 defaults.
+    new Setting(containerEl)
+      .setDisabled(!portentOn)
+      .setName("Portent schema")
+      .setDesc(
+        "Customize the frontmatter keys and vocabularies Portent checks — track your own conventions or a future spec revision without a plugin update. Leave a field blank to restore its default."
+      )
+      .setHeading();
+
+    new Setting(containerEl)
+      .setDisabled(!portentOn)
+      .setName("Type vocabulary")
+      .setDesc("Comma-separated accepted `type` values.")
+      .addText((t) =>
+        t
+          .setValue(this.plugin.settings.portentTypes.join(", "))
+          .onChange(async (v) => {
+            const list = v
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean);
+            this.plugin.settings.portentTypes = list.length
+              ? list
+              : [...PORTENT_TYPES];
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setDisabled(!portentOn)
+      .setName("Lifecycle status field")
+      .setDesc(
+        "Frontmatter key holding the single lifecycle value (default `status`; e.g. rename to `state`)."
+      )
+      .addText((t) =>
+        t
+          .setValue(this.plugin.settings.portentStatusField)
+          .onChange(async (v) => {
+            this.plugin.settings.portentStatusField = v.trim() || "status";
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setDisabled(!portentOn)
+      .setName("Lifecycle status values")
+      .setDesc("Comma-separated accepted values for the status field.")
+      .addText((t) =>
+        t
+          .setValue(this.plugin.settings.portentStatuses.join(", "))
+          .onChange(async (v) => {
+            const list = v
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean);
+            this.plugin.settings.portentStatuses = list.length
+              ? list
+              : [...PORTENT_STATUSES];
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setDisabled(!portentOn)
+      .setName("Organized field")
+      .setDesc("Frontmatter key for the boolean `organized` lifecycle flag.")
+      .addText((t) =>
+        t
+          .setValue(this.plugin.settings.portentOrganizedField)
+          .onChange(async (v) => {
+            this.plugin.settings.portentOrganizedField =
+              v.trim() || "organized";
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setDisabled(!portentOn)
+      .setName("Archived field")
+      .setDesc("Frontmatter key for the boolean `archived` lifecycle flag.")
+      .addText((t) =>
+        t
+          .setValue(this.plugin.settings.portentArchivedField)
+          .onChange(async (v) => {
+            this.plugin.settings.portentArchivedField = v.trim() || "archived";
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setDisabled(!portentOn)
+      .setName("Belongs-to field")
+      .setDesc(
+        "Frontmatter key for the single-parent relationship (a wikilink)."
+      )
+      .addText((t) =>
+        t
+          .setValue(this.plugin.settings.portentBelongsToField)
+          .onChange(async (v) => {
+            this.plugin.settings.portentBelongsToField =
+              v.trim() || "belongs_to";
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setDisabled(!portentOn)
+      .setName("Related-to field")
+      .setDesc(
+        "Frontmatter key for the related-notes relationship (a list of wikilinks)."
+      )
+      .addText((t) =>
+        t
+          .setValue(this.plugin.settings.portentRelatedToField)
+          .onChange(async (v) => {
+            this.plugin.settings.portentRelatedToField =
+              v.trim() || "related_to";
             await this.plugin.saveSettings();
           })
       );

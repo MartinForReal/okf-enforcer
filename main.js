@@ -26,6 +26,17 @@ var import_obsidian3 = require("obsidian");
 
 // validator.ts
 var import_obsidian = require("obsidian");
+var PORTENT_TYPES = [
+  "Project",
+  "Operation",
+  "Responsibility",
+  "Task",
+  "Event",
+  "Note",
+  "Topic",
+  "Person"
+];
+var PORTENT_STATUSES = ["captured", "organized", "archived"];
 var DEFAULT_SETTINGS = {
   defaultType: "Concept",
   warnRecommendedFields: true,
@@ -38,19 +49,19 @@ var DEFAULT_SETTINGS = {
   autoGenerateIndex: true,
   batchSize: 50,
   excludeFolders: ["Templates"],
-  enablePortent: false
+  enablePortent: false,
+  portentTypes: [...PORTENT_TYPES],
+  portentStatusField: "status",
+  portentStatuses: [...PORTENT_STATUSES],
+  portentOrganizedField: "organized",
+  portentArchivedField: "archived",
+  portentBelongsToField: "belongs_to",
+  portentRelatedToField: "related_to",
+  portentCheckTypeVocab: true,
+  portentCheckLifecycle: true,
+  portentCheckBelongsTo: true,
+  portentCheckRelatedTo: true
 };
-var PORTENT_TYPES = [
-  "Project",
-  "Operation",
-  "Responsibility",
-  "Task",
-  "Event",
-  "Note",
-  "Topic",
-  "Person"
-];
-var PORTENT_STATUSES = ["captured", "organized", "archived"];
 var WIKILINK_RE = /^\[\[[^[\]]+?\]\]$/;
 var FM_RE = /^---\r?\n([\s\S]*?)\r?\n---/;
 var ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -165,90 +176,86 @@ function validateConcept(path, content, settings) {
     });
   }
   if (settings.enablePortent) {
-    issues.push(...validatePortent(data));
+    issues.push(...validatePortent(data, settings));
   }
   return issues;
 }
-function validatePortent(data) {
+function validatePortent(data, settings) {
   const issues = [];
   const type = data["type"];
-  if (typeof type === "string" && type.trim().length > 0) {
+  const types = settings.portentTypes.length ? settings.portentTypes : [...PORTENT_TYPES];
+  const statuses = settings.portentStatuses.length ? settings.portentStatuses : [...PORTENT_STATUSES];
+  const statusField = settings.portentStatusField || "status";
+  const organizedField = settings.portentOrganizedField || "organized";
+  const archivedField = settings.portentArchivedField || "archived";
+  const belongsToField = settings.portentBelongsToField || "belongs_to";
+  const relatedToField = settings.portentRelatedToField || "related_to";
+  if (settings.portentCheckTypeVocab && typeof type === "string" && type.trim().length > 0) {
     const t = type.trim();
-    if (!PORTENT_TYPES.includes(t)) {
+    if (!types.includes(t)) {
       issues.push({
         severity: "warning",
         rule: "portent/types",
-        message: `\`type: ${t}\` is not one of Portent's default types (${PORTENT_TYPES.join(
+        message: `\`type: ${t}\` is not one of the Portent types (${types.join(
           ", "
-        )}). Extend intentionally or switch to a default.`
+        )}). Extend intentionally or switch to a configured type.`
       });
     }
   }
-  const hasOrganized = "organized" in data;
-  const hasArchived = "archived" in data;
-  const hasStatus = "status" in data;
-  if (!hasOrganized && !hasArchived && !hasStatus) {
+  if (settings.portentCheckLifecycle && statusField in data) {
+    const s = data[statusField];
+    if (typeof s !== "string" || !statuses.includes(s.trim())) {
+      issues.push({
+        severity: "warning",
+        rule: "portent/lifecycle",
+        message: `\`${statusField}\` should map to one of ${statuses.join(
+          " | "
+        )}.`
+      });
+    }
+  }
+  if (settings.portentCheckLifecycle && organizedField in data && typeof data[organizedField] !== "boolean") {
     issues.push({
       severity: "warning",
       rule: "portent/lifecycle",
-      message: "Portent lifecycle metadata missing. Add `status: captured|organized|archived`, or boolean `organized`/`archived` fields."
+      message: `\`${organizedField}\` should be a boolean (true/false).`
     });
-  } else {
-    if (hasStatus) {
-      const s = data["status"];
-      if (typeof s !== "string" || !PORTENT_STATUSES.includes(s.trim())) {
-        issues.push({
-          severity: "warning",
-          rule: "portent/lifecycle",
-          message: `\`status\` must be one of ${PORTENT_STATUSES.join(
-            " | "
-          )}.`
-        });
-      }
-    }
-    if (hasOrganized && typeof data["organized"] !== "boolean") {
-      issues.push({
-        severity: "warning",
-        rule: "portent/lifecycle",
-        message: "`organized` should be a boolean (true/false)."
-      });
-    }
-    if (hasArchived && typeof data["archived"] !== "boolean") {
-      issues.push({
-        severity: "warning",
-        rule: "portent/lifecycle",
-        message: "`archived` should be a boolean (true/false)."
-      });
-    }
   }
-  if ("belongs_to" in data) {
-    const bt = data["belongs_to"];
-    if (bt !== null && bt !== void 0) {
+  if (settings.portentCheckLifecycle && archivedField in data && typeof data[archivedField] !== "boolean") {
+    issues.push({
+      severity: "warning",
+      rule: "portent/lifecycle",
+      message: `\`${archivedField}\` should be a boolean (true/false).`
+    });
+  }
+  if (settings.portentCheckBelongsTo && belongsToField in data) {
+    const bt = data[belongsToField];
+    if (hasNonEmpty(data, belongsToField)) {
       if (typeof bt === "string") {
         if (!WIKILINK_RE.test(bt.trim())) {
           issues.push({
             severity: "warning",
             rule: "portent/relationships",
-            message: '`belongs_to` should be a single wikilink like `"[[Parent Note]]"`.'
+            message: `\`${belongsToField}\` should be a single wikilink like \`"[[Parent Note]]"\`.`
           });
         }
       } else {
         issues.push({
           severity: "warning",
           rule: "portent/relationships",
-          message: "`belongs_to` denotes a single primary parent \u2014 expected one wikilink string, not a list or object."
+          message: `\`${belongsToField}\` denotes a single primary parent \u2014 expected one wikilink string, not a list or object.`
         });
       }
     }
   }
-  if ("related_to" in data) {
-    const rt = data["related_to"];
-    if (rt !== null && rt !== void 0) {
+  if (settings.portentCheckRelatedTo && relatedToField in data) {
+    const rt = data[relatedToField];
+    if (hasNonEmpty(data, relatedToField)) {
       if (!Array.isArray(rt)) {
         issues.push({
           severity: "warning",
           rule: "portent/relationships",
-          message: "`related_to` should be a YAML list of wikilinks (may be empty)."
+          message: `\`${relatedToField}\` should be a YAML list of wikilinks (may be empty).`
         });
       } else {
         const bad = rt.filter(
@@ -258,7 +265,7 @@ function validatePortent(data) {
           issues.push({
             severity: "warning",
             rule: "portent/relationships",
-            message: `\`related_to\` entries should be wikilinks like \`"[[Other Note]]"\` (${bad.length} entr${bad.length === 1 ? "y is" : "ies are"} not).`
+            message: `\`${relatedToField}\` entries should be wikilinks like \`"[[Other Note]]"\` (${bad.length} entr${bad.length === 1 ? "y is" : "ies are"} not).`
           });
         }
       }
@@ -1247,10 +1254,95 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
     );
     new import_obsidian3.Setting(containerEl).setName("Portent").setHeading();
     new import_obsidian3.Setting(containerEl).setName("Enable Portent validation").setDesc(
-      "Additionally validate notes against the Portent spec (portent.md): default type vocabulary (Project, Operation, Responsibility, Task, Event, Note, Topic, Person), lifecycle metadata (status / organized / archived), and relationship shape (belongs_to, related_to as wikilinks). All Portent findings are warnings \u2014 they never block OKF conformance."
+      "Experimental (beta) \u2014 the Portent spec is pre-1.0 and may still change. Additionally validate notes against the Portent spec (portent.md): default type vocabulary (Project, Operation, Responsibility, Task, Event, Note, Topic, Person), lifecycle metadata (optional and format-free; status / organized / archived, or omitted when organized by default), and relationship shape (belongs_to, related_to as wikilinks). All Portent findings are warnings \u2014 they never block OKF conformance."
     ).addToggle(
       (tg) => tg.setValue(this.plugin.settings.enablePortent).onChange(async (v) => {
         this.plugin.settings.enablePortent = v;
+        await this.plugin.saveSettings();
+        this.display();
+      })
+    );
+    const portentOn = this.plugin.settings.enablePortent;
+    new import_obsidian3.Setting(containerEl).setDisabled(!portentOn).setName("Validate type vocabulary").setDesc(
+      "Warn when `type` is not one of the configured Portent types. Turn off if you use your own type names."
+    ).addToggle(
+      (tg) => tg.setValue(this.plugin.settings.portentCheckTypeVocab).onChange(async (v) => {
+        this.plugin.settings.portentCheckTypeVocab = v;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian3.Setting(containerEl).setDisabled(!portentOn).setName("Validate lifecycle").setDesc(
+      "Check lifecycle values when present (status maps to the configured set; `organized`/`archived` are booleans). A missing lifecycle is never flagged."
+    ).addToggle(
+      (tg) => tg.setValue(this.plugin.settings.portentCheckLifecycle).onChange(async (v) => {
+        this.plugin.settings.portentCheckLifecycle = v;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian3.Setting(containerEl).setDisabled(!portentOn).setName("Validate belongs_to").setDesc(
+      "Check `belongs_to` shape when present (a single wikilink to the primary parent)."
+    ).addToggle(
+      (tg) => tg.setValue(this.plugin.settings.portentCheckBelongsTo).onChange(async (v) => {
+        this.plugin.settings.portentCheckBelongsTo = v;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian3.Setting(containerEl).setDisabled(!portentOn).setName("Validate related_to").setDesc("Check `related_to` shape when present (a list of wikilinks).").addToggle(
+      (tg) => tg.setValue(this.plugin.settings.portentCheckRelatedTo).onChange(async (v) => {
+        this.plugin.settings.portentCheckRelatedTo = v;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian3.Setting(containerEl).setDisabled(!portentOn).setName("Portent schema").setDesc(
+      "Customize the frontmatter keys and vocabularies Portent checks \u2014 track your own conventions or a future spec revision without a plugin update. Leave a field blank to restore its default."
+    ).setHeading();
+    new import_obsidian3.Setting(containerEl).setDisabled(!portentOn).setName("Type vocabulary").setDesc("Comma-separated accepted `type` values.").addText(
+      (t) => t.setValue(this.plugin.settings.portentTypes.join(", ")).onChange(async (v) => {
+        const list = v.split(",").map((s) => s.trim()).filter(Boolean);
+        this.plugin.settings.portentTypes = list.length ? list : [...PORTENT_TYPES];
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian3.Setting(containerEl).setDisabled(!portentOn).setName("Lifecycle status field").setDesc(
+      "Frontmatter key holding the single lifecycle value (default `status`; e.g. rename to `state`)."
+    ).addText(
+      (t) => t.setValue(this.plugin.settings.portentStatusField).onChange(async (v) => {
+        this.plugin.settings.portentStatusField = v.trim() || "status";
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian3.Setting(containerEl).setDisabled(!portentOn).setName("Lifecycle status values").setDesc("Comma-separated accepted values for the status field.").addText(
+      (t) => t.setValue(this.plugin.settings.portentStatuses.join(", ")).onChange(async (v) => {
+        const list = v.split(",").map((s) => s.trim()).filter(Boolean);
+        this.plugin.settings.portentStatuses = list.length ? list : [...PORTENT_STATUSES];
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian3.Setting(containerEl).setDisabled(!portentOn).setName("Organized field").setDesc("Frontmatter key for the boolean `organized` lifecycle flag.").addText(
+      (t) => t.setValue(this.plugin.settings.portentOrganizedField).onChange(async (v) => {
+        this.plugin.settings.portentOrganizedField = v.trim() || "organized";
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian3.Setting(containerEl).setDisabled(!portentOn).setName("Archived field").setDesc("Frontmatter key for the boolean `archived` lifecycle flag.").addText(
+      (t) => t.setValue(this.plugin.settings.portentArchivedField).onChange(async (v) => {
+        this.plugin.settings.portentArchivedField = v.trim() || "archived";
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian3.Setting(containerEl).setDisabled(!portentOn).setName("Belongs-to field").setDesc(
+      "Frontmatter key for the single-parent relationship (a wikilink)."
+    ).addText(
+      (t) => t.setValue(this.plugin.settings.portentBelongsToField).onChange(async (v) => {
+        this.plugin.settings.portentBelongsToField = v.trim() || "belongs_to";
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian3.Setting(containerEl).setDisabled(!portentOn).setName("Related-to field").setDesc(
+      "Frontmatter key for the related-notes relationship (a list of wikilinks)."
+    ).addText(
+      (t) => t.setValue(this.plugin.settings.portentRelatedToField).onChange(async (v) => {
+        this.plugin.settings.portentRelatedToField = v.trim() || "related_to";
         await this.plugin.saveSettings();
       })
     );

@@ -195,3 +195,10 @@
   justify-content: flex-end;
   margin-top: 14px;
 }
+
+/* Dependent settings: fully non-interactive when disabled (e.g. the Portent
+   sub-options while Portent validation is off). */
+.setting-item.is-disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}

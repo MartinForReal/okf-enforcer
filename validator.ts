@@ -18,6 +18,24 @@ export type FixKind =
   | "add-title"
   | "add-timestamp";
 
+/**
+ * Portent v0 default vocabulary.
+ * Source: https://portent.md/types — "PORT" (actionable) + "ENTP" (records).
+ */
+export const PORTENT_TYPES = [
+  "Project",
+  "Operation",
+  "Responsibility",
+  "Task",
+  "Event",
+  "Note",
+  "Topic",
+  "Person",
+] as const;
+
+/** Portent lifecycle values when using the single-field `status` form. */
+export const PORTENT_STATUSES = ["captured", "organized", "archived"] as const;
+
 export interface OkfSettings {
   defaultType: string;
   warnRecommendedFields: boolean;
@@ -37,6 +55,31 @@ export interface OkfSettings {
    * to the baseline OKF rules.
    */
   enablePortent: boolean;
+  /**
+   * Free-form Portent schema. Field-name settings map each Portent concept onto
+   * whatever frontmatter key the vault actually uses (e.g. `status` → `state`),
+   * and the vocabulary lists define the accepted `type` and lifecycle values.
+   * This lets users follow their own conventions — or a future revision of the
+   * spec — without waiting for a plugin update. Consulted only when
+   * `enablePortent` is true; blank values fall back to the Portent v0 defaults.
+   */
+  portentTypes: string[];
+  portentStatusField: string;
+  portentStatuses: string[];
+  portentOrganizedField: string;
+  portentArchivedField: string;
+  portentBelongsToField: string;
+  portentRelatedToField: string;
+  /**
+   * Per-check toggles for Portent's optional fields. Each gates one optional-
+   * field check and defaults to on (matching prior behavior) when Portent is
+   * enabled — turn a check off to skip validating an optional field the vault
+   * does not use.
+   */
+  portentCheckTypeVocab: boolean;
+  portentCheckLifecycle: boolean;
+  portentCheckBelongsTo: boolean;
+  portentCheckRelatedTo: boolean;
 }
 
 export const DEFAULT_SETTINGS: OkfSettings = {
@@ -52,25 +95,18 @@ export const DEFAULT_SETTINGS: OkfSettings = {
   batchSize: 50,
   excludeFolders: ["Templates"],
   enablePortent: false,
+  portentTypes: [...PORTENT_TYPES],
+  portentStatusField: "status",
+  portentStatuses: [...PORTENT_STATUSES],
+  portentOrganizedField: "organized",
+  portentArchivedField: "archived",
+  portentBelongsToField: "belongs_to",
+  portentRelatedToField: "related_to",
+  portentCheckTypeVocab: true,
+  portentCheckLifecycle: true,
+  portentCheckBelongsTo: true,
+  portentCheckRelatedTo: true,
 };
-
-/**
- * Portent v0 default vocabulary.
- * Source: https://portent.md/types — "PORT" (actionable) + "ENTP" (records).
- */
-export const PORTENT_TYPES = [
-  "Project",
-  "Operation",
-  "Responsibility",
-  "Task",
-  "Event",
-  "Note",
-  "Topic",
-  "Person",
-] as const;
-
-/** Portent lifecycle values when using the single-field `status` form. */
-export const PORTENT_STATUSES = ["captured", "organized", "archived"] as const;
 
 const WIKILINK_RE = /^\[\[[^[\]]+?\]\]$/;
 
@@ -225,7 +261,7 @@ function validateConcept(
   }
 
   if (settings.enablePortent) {
-    issues.push(...validatePortent(data));
+    issues.push(...validatePortent(data, settings));
   }
 
   return issues;
@@ -235,105 +271,126 @@ function validateConcept(
  * Portent (https://portent.md) checks — layered on top of OKF v0.1.
  *
  * Portent is not part of the OKF spec, so every issue here is a **warning**:
- * missing lifecycle metadata, non-default types, and malformed relationship
- * values never block a bundle from being OKF-conformant. Users opt in via
- * `settings.enablePortent`.
+ * non-default types and malformed lifecycle/relationship values never block a
+ * bundle from being OKF-conformant. Users opt in via `settings.enablePortent`.
+ *
+ * The schema is free-form (see `OkfSettings.portent*`): field names are remapped
+ * onto the vault's own frontmatter keys and the `type`/lifecycle vocabularies
+ * come from settings, so a renamed field (e.g. `status` → `state`) or a future
+ * spec revision needs no code change. Blank settings fall back to the Portent
+ * v0 defaults.
  */
-function validatePortent(data: Record<string, unknown>): OkfIssue[] {
+function validatePortent(
+  data: Record<string, unknown>,
+  settings: OkfSettings
+): OkfIssue[] {
   const issues: OkfIssue[] = [];
   const type = data["type"];
 
-  // Type must come from the 8-item default vocabulary (or be an intentional
+  const types = settings.portentTypes.length
+    ? settings.portentTypes
+    : [...PORTENT_TYPES];
+  const statuses = settings.portentStatuses.length
+    ? settings.portentStatuses
+    : [...PORTENT_STATUSES];
+  const statusField = settings.portentStatusField || "status";
+  const organizedField = settings.portentOrganizedField || "organized";
+  const archivedField = settings.portentArchivedField || "archived";
+  const belongsToField = settings.portentBelongsToField || "belongs_to";
+  const relatedToField = settings.portentRelatedToField || "related_to";
+
+  // Type must come from the configured vocabulary (or be an intentional
   // extension). Only warn — the spec explicitly allows extensions.
-  if (typeof type === "string" && type.trim().length > 0) {
+  if (
+    settings.portentCheckTypeVocab &&
+    typeof type === "string" &&
+    type.trim().length > 0
+  ) {
     const t = type.trim();
-    if (!(PORTENT_TYPES as readonly string[]).includes(t)) {
+    if (!types.includes(t)) {
       issues.push({
         severity: "warning",
         rule: "portent/types",
-        message: `\`type: ${t}\` is not one of Portent's default types (${PORTENT_TYPES.join(
+        message: `\`type: ${t}\` is not one of the Portent types (${types.join(
           ", "
-        )}). Extend intentionally or switch to a default.`,
+        )}). Extend intentionally or switch to a configured type.`,
       });
     }
   }
 
-  // Lifecycle: either boolean `organized`/`archived`, or a single `status`.
-  const hasOrganized = "organized" in data;
-  const hasArchived = "archived" in data;
-  const hasStatus = "status" in data;
-  if (!hasOrganized && !hasArchived && !hasStatus) {
+  // Lifecycle metadata is representation-free (Portent — "Lifecycle Fields"):
+  // an object MAY omit it entirely (organized by default) and implementations
+  // choose their own field names, so a *missing* lifecycle is never flagged.
+  // When a recognized field is present we still offer a light value check — the
+  // spec says statuses SHOULD map to captured/organized/archived, and the
+  // boolean flags are true/false.
+  if (settings.portentCheckLifecycle && statusField in data) {
+    const s = data[statusField];
+    if (typeof s !== "string" || !statuses.includes(s.trim())) {
+      issues.push({
+        severity: "warning",
+        rule: "portent/lifecycle",
+        message: `\`${statusField}\` should map to one of ${statuses.join(
+          " | "
+        )}.`,
+      });
+    }
+  }
+  if (
+    settings.portentCheckLifecycle &&
+    organizedField in data &&
+    typeof data[organizedField] !== "boolean"
+  ) {
     issues.push({
       severity: "warning",
       rule: "portent/lifecycle",
-      message:
-        "Portent lifecycle metadata missing. Add `status: captured|organized|archived`, or boolean `organized`/`archived` fields.",
+      message: `\`${organizedField}\` should be a boolean (true/false).`,
     });
-  } else {
-    if (hasStatus) {
-      const s = data["status"];
-      if (
-        typeof s !== "string" ||
-        !(PORTENT_STATUSES as readonly string[]).includes(s.trim())
-      ) {
-        issues.push({
-          severity: "warning",
-          rule: "portent/lifecycle",
-          message: `\`status\` must be one of ${PORTENT_STATUSES.join(
-            " | "
-          )}.`,
-        });
-      }
-    }
-    if (hasOrganized && typeof data["organized"] !== "boolean") {
-      issues.push({
-        severity: "warning",
-        rule: "portent/lifecycle",
-        message: "`organized` should be a boolean (true/false).",
-      });
-    }
-    if (hasArchived && typeof data["archived"] !== "boolean") {
-      issues.push({
-        severity: "warning",
-        rule: "portent/lifecycle",
-        message: "`archived` should be a boolean (true/false).",
-      });
-    }
+  }
+  if (
+    settings.portentCheckLifecycle &&
+    archivedField in data &&
+    typeof data[archivedField] !== "boolean"
+  ) {
+    issues.push({
+      severity: "warning",
+      rule: "portent/lifecycle",
+      message: `\`${archivedField}\` should be a boolean (true/false).`,
+    });
   }
 
-  // Relationships: `belongs_to` (single wikilink) and `related_to` (list).
-  if ("belongs_to" in data) {
-    const bt = data["belongs_to"];
-    if (bt !== null && bt !== undefined) {
+  // Relationships: belongs_to (single wikilink) and related_to (list). An empty
+  // value — null, blank string, or empty list — is treated as "not set" (e.g. a
+  // template placeholder) and never warns; only a non-empty malformed value does.
+  if (settings.portentCheckBelongsTo && belongsToField in data) {
+    const bt = data[belongsToField];
+    if (hasNonEmpty(data, belongsToField)) {
       if (typeof bt === "string") {
         if (!WIKILINK_RE.test(bt.trim())) {
           issues.push({
             severity: "warning",
             rule: "portent/relationships",
-            message:
-              "`belongs_to` should be a single wikilink like `\"[[Parent Note]]\"`.",
+            message: `\`${belongsToField}\` should be a single wikilink like \`"[[Parent Note]]"\`.`,
           });
         }
       } else {
         issues.push({
           severity: "warning",
           rule: "portent/relationships",
-          message:
-            "`belongs_to` denotes a single primary parent — expected one wikilink string, not a list or object.",
+          message: `\`${belongsToField}\` denotes a single primary parent — expected one wikilink string, not a list or object.`,
         });
       }
     }
   }
 
-  if ("related_to" in data) {
-    const rt = data["related_to"];
-    if (rt !== null && rt !== undefined) {
+  if (settings.portentCheckRelatedTo && relatedToField in data) {
+    const rt = data[relatedToField];
+    if (hasNonEmpty(data, relatedToField)) {
       if (!Array.isArray(rt)) {
         issues.push({
           severity: "warning",
           rule: "portent/relationships",
-          message:
-            "`related_to` should be a YAML list of wikilinks (may be empty).",
+          message: `\`${relatedToField}\` should be a YAML list of wikilinks (may be empty).`,
         });
       } else {
         const bad = rt.filter(
@@ -343,7 +400,7 @@ function validatePortent(data: Record<string, unknown>): OkfIssue[] {
           issues.push({
             severity: "warning",
             rule: "portent/relationships",
-            message: `\`related_to\` entries should be wikilinks like \`"[[Other Note]]"\` (${bad.length} entr${
+            message: `\`${relatedToField}\` entries should be wikilinks like \`"[[Other Note]]"\` (${bad.length} entr${
               bad.length === 1 ? "y is" : "ies are"
             } not).`,
           });
