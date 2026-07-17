@@ -6,7 +6,6 @@ import {
   Plugin,
   PluginSettingTab,
   Setting,
-  SettingDefinitionItem,
   TFile,
   TFolder,
   WorkspaceLeaf,
@@ -673,6 +672,19 @@ export default class OkfPlugin extends Plugin {
   }
 }
 
+/**
+ * Minimal local shape of Obsidian 1.13+'s declarative setting definitions.
+ * Declared here rather than imported so the plugin type-checks against its
+ * 1.7.2 `minAppVersion` while still supplying definitions to Obsidian 1.13+ at
+ * runtime via the duck-typed `getSettingDefinitions()` method.
+ */
+type SettingDefinitionItem = {
+  name: string;
+  desc?: string | DocumentFragment;
+  searchable?: boolean;
+  render: (setting: Setting) => void | (() => void);
+};
+
 type OkfSettingSpec = {
   name: string;
   desc?: string;
@@ -985,8 +997,7 @@ class OkfSettingTab extends PluginSettingTab {
     }
   }
 
-  /** Imperative rendering — Obsidian < 1.13's sanctioned dual-support fallback. */
-  // eslint-disable-next-line @typescript-eslint/no-deprecated
+  /** Imperative rendering — Obsidian < 1.13's dual-support fallback. */
   display(): void {
     const { containerEl } = this;
     containerEl.empty();

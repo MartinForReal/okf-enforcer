@@ -1447,8 +1447,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       row.setDisabled(true);
     }
   }
-  /** Imperative rendering — Obsidian < 1.13's sanctioned dual-support fallback. */
-  // eslint-disable-next-line @typescript-eslint/no-deprecated
+  /** Imperative rendering — Obsidian < 1.13's dual-support fallback. */
   display() {
     const { containerEl } = this;
     containerEl.empty();
