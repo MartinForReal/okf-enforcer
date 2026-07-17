@@ -4,6 +4,49 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-07-17
+
+> **Portent support is experimental (beta).** The [Portent](https://portent.md)
+> spec is pre-1.0 and may still change; validation is opt-in and every Portent
+> rule is a warning. The schema is fully configurable so you can adapt as the
+> spec evolves.
+
+### Added
+- **Configurable Portent schema.** With **Enable Portent validation** on, the
+  Portent property names and vocabularies are now free-form (Settings → OKF
+  Enforcer → Portent schema). Remap each concept onto your vault's own
+  frontmatter keys — for example rename the lifecycle field from `status` to
+  `state` — and set the accepted `type` and status values. This lets you track
+  your own conventions or a future revision of the Portent spec without a plugin
+  update. Blank fields fall back to the Portent v0 defaults, so existing vaults
+  are unaffected. (#4)
+- **Per-check Portent toggles.** Type-vocabulary, lifecycle, `belongs_to`, and
+  `related_to` validation can each be turned on or off independently under
+  Settings → OKF Enforcer → Portent, so you only validate the optional fields
+  your vault uses. These and the schema fields are grayed out and disabled until
+  **Enable Portent validation** is on.
+- **Settings searchable on Obsidian 1.13+.** The settings tab now implements the
+  declarative `getSettingDefinitions()` API, so every setting is indexed by
+  Obsidian's global settings search on 1.13.0+. The imperative `display()` is
+  kept as the fallback for older versions (dual-support); both render from one
+  shared definition list so they can't drift.
+
+### Changed
+- **Minimum Obsidian version is now 1.7.2** (was 1.4.0). The plugin already
+  relied on APIs newer than the old floor — `fileManager.processFrontMatter`
+  (since 1.4.4) and `workspace.revealLeaf` (since 1.7.2) — so the declared
+  `1.4.0` never actually worked; the manifest now states the true minimum.
+
+### Fixed
+- **Lifecycle metadata is now format-free.** Per the Portent spec ("Use any
+  representation that preserves organized and archived state"), an object may
+  omit lifecycle metadata entirely when it is organized by default, so the
+  plugin no longer warns "Portent lifecycle metadata missing." Value checks
+  still apply when a recognized lifecycle field is present.
+- **Empty relationships don't warn.** A blank `belongs_to`/`related_to` (null,
+  empty string, or empty list) is treated as unset — like a template
+  placeholder — so only non-empty malformed values are flagged.
+
 ## [0.2.0] - 2026-07-13
 
 ### Added

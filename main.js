@@ -26,6 +26,17 @@ var import_obsidian3 = require("obsidian");
 
 // validator.ts
 var import_obsidian = require("obsidian");
+var PORTENT_TYPES = [
+  "Project",
+  "Operation",
+  "Responsibility",
+  "Task",
+  "Event",
+  "Note",
+  "Topic",
+  "Person"
+];
+var PORTENT_STATUSES = ["captured", "organized", "archived"];
 var DEFAULT_SETTINGS = {
   defaultType: "Concept",
   warnRecommendedFields: true,
@@ -38,19 +49,19 @@ var DEFAULT_SETTINGS = {
   autoGenerateIndex: true,
   batchSize: 50,
   excludeFolders: ["Templates"],
-  enablePortent: false
+  enablePortent: false,
+  portentTypes: [...PORTENT_TYPES],
+  portentStatusField: "status",
+  portentStatuses: [...PORTENT_STATUSES],
+  portentOrganizedField: "organized",
+  portentArchivedField: "archived",
+  portentBelongsToField: "belongs_to",
+  portentRelatedToField: "related_to",
+  portentCheckTypeVocab: true,
+  portentCheckLifecycle: true,
+  portentCheckBelongsTo: true,
+  portentCheckRelatedTo: true
 };
-var PORTENT_TYPES = [
-  "Project",
-  "Operation",
-  "Responsibility",
-  "Task",
-  "Event",
-  "Note",
-  "Topic",
-  "Person"
-];
-var PORTENT_STATUSES = ["captured", "organized", "archived"];
 var WIKILINK_RE = /^\[\[[^[\]]+?\]\]$/;
 var FM_RE = /^---\r?\n([\s\S]*?)\r?\n---/;
 var ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -165,90 +176,86 @@ function validateConcept(path, content, settings) {
     });
   }
   if (settings.enablePortent) {
-    issues.push(...validatePortent(data));
+    issues.push(...validatePortent(data, settings));
   }
   return issues;
 }
-function validatePortent(data) {
+function validatePortent(data, settings) {
   const issues = [];
   const type = data["type"];
-  if (typeof type === "string" && type.trim().length > 0) {
+  const types = settings.portentTypes.length ? settings.portentTypes : [...PORTENT_TYPES];
+  const statuses = settings.portentStatuses.length ? settings.portentStatuses : [...PORTENT_STATUSES];
+  const statusField = settings.portentStatusField || "status";
+  const organizedField = settings.portentOrganizedField || "organized";
+  const archivedField = settings.portentArchivedField || "archived";
+  const belongsToField = settings.portentBelongsToField || "belongs_to";
+  const relatedToField = settings.portentRelatedToField || "related_to";
+  if (settings.portentCheckTypeVocab && typeof type === "string" && type.trim().length > 0) {
     const t = type.trim();
-    if (!PORTENT_TYPES.includes(t)) {
+    if (!types.includes(t)) {
       issues.push({
         severity: "warning",
         rule: "portent/types",
-        message: `\`type: ${t}\` is not one of Portent's default types (${PORTENT_TYPES.join(
+        message: `\`type: ${t}\` is not one of the Portent types (${types.join(
           ", "
-        )}). Extend intentionally or switch to a default.`
+        )}). Extend intentionally or switch to a configured type.`
       });
     }
   }
-  const hasOrganized = "organized" in data;
-  const hasArchived = "archived" in data;
-  const hasStatus = "status" in data;
-  if (!hasOrganized && !hasArchived && !hasStatus) {
+  if (settings.portentCheckLifecycle && statusField in data) {
+    const s = data[statusField];
+    if (typeof s !== "string" || !statuses.includes(s.trim())) {
+      issues.push({
+        severity: "warning",
+        rule: "portent/lifecycle",
+        message: `\`${statusField}\` should map to one of ${statuses.join(
+          " | "
+        )}.`
+      });
+    }
+  }
+  if (settings.portentCheckLifecycle && organizedField in data && typeof data[organizedField] !== "boolean") {
     issues.push({
       severity: "warning",
       rule: "portent/lifecycle",
-      message: "Portent lifecycle metadata missing. Add `status: captured|organized|archived`, or boolean `organized`/`archived` fields."
+      message: `\`${organizedField}\` should be a boolean (true/false).`
     });
-  } else {
-    if (hasStatus) {
-      const s = data["status"];
-      if (typeof s !== "string" || !PORTENT_STATUSES.includes(s.trim())) {
-        issues.push({
-          severity: "warning",
-          rule: "portent/lifecycle",
-          message: `\`status\` must be one of ${PORTENT_STATUSES.join(
-            " | "
-          )}.`
-        });
-      }
-    }
-    if (hasOrganized && typeof data["organized"] !== "boolean") {
-      issues.push({
-        severity: "warning",
-        rule: "portent/lifecycle",
-        message: "`organized` should be a boolean (true/false)."
-      });
-    }
-    if (hasArchived && typeof data["archived"] !== "boolean") {
-      issues.push({
-        severity: "warning",
-        rule: "portent/lifecycle",
-        message: "`archived` should be a boolean (true/false)."
-      });
-    }
   }
-  if ("belongs_to" in data) {
-    const bt = data["belongs_to"];
-    if (bt !== null && bt !== void 0) {
+  if (settings.portentCheckLifecycle && archivedField in data && typeof data[archivedField] !== "boolean") {
+    issues.push({
+      severity: "warning",
+      rule: "portent/lifecycle",
+      message: `\`${archivedField}\` should be a boolean (true/false).`
+    });
+  }
+  if (settings.portentCheckBelongsTo && belongsToField in data) {
+    const bt = data[belongsToField];
+    if (hasNonEmpty(data, belongsToField)) {
       if (typeof bt === "string") {
         if (!WIKILINK_RE.test(bt.trim())) {
           issues.push({
             severity: "warning",
             rule: "portent/relationships",
-            message: '`belongs_to` should be a single wikilink like `"[[Parent Note]]"`.'
+            message: `\`${belongsToField}\` should be a single wikilink like \`"[[Parent Note]]"\`.`
           });
         }
       } else {
         issues.push({
           severity: "warning",
           rule: "portent/relationships",
-          message: "`belongs_to` denotes a single primary parent \u2014 expected one wikilink string, not a list or object."
+          message: `\`${belongsToField}\` denotes a single primary parent \u2014 expected one wikilink string, not a list or object.`
         });
       }
     }
   }
-  if ("related_to" in data) {
-    const rt = data["related_to"];
-    if (rt !== null && rt !== void 0) {
+  if (settings.portentCheckRelatedTo && relatedToField in data) {
+    const rt = data[relatedToField];
+    if (hasNonEmpty(data, relatedToField)) {
       if (!Array.isArray(rt)) {
         issues.push({
           severity: "warning",
           rule: "portent/relationships",
-          message: "`related_to` should be a YAML list of wikilinks (may be empty)."
+          message: `\`${relatedToField}\` should be a YAML list of wikilinks (may be empty).`
         });
       } else {
         const bad = rt.filter(
@@ -258,7 +265,7 @@ function validatePortent(data) {
           issues.push({
             severity: "warning",
             rule: "portent/relationships",
-            message: `\`related_to\` entries should be wikilinks like \`"[[Other Note]]"\` (${bad.length} entr${bad.length === 1 ? "y is" : "ies are"} not).`
+            message: `\`${relatedToField}\` entries should be wikilinks like \`"[[Other Note]]"\` (${bad.length} entr${bad.length === 1 ? "y is" : "ies are"} not).`
           });
         }
       }
@@ -526,11 +533,11 @@ var OkfReportView = class extends import_obsidian2.ItemView {
     summary.createSpan({ cls: "okf-chip okf-error", text: `\u2716 ${errorFiles}` });
     summary.createSpan({ cls: "okf-chip okf-warn", text: `\u26A0 ${warnFiles}` });
     if (this.scanned === 0) {
-      b.createEl("div", { cls: "okf-empty", text: "No scan yet \u2014 click Rescan." });
+      b.createDiv({ cls: "okf-empty", text: "No scan yet \u2014 click Rescan." });
       return;
     }
     if (this.results.length === 0) {
-      b.createEl("div", { cls: "okf-empty", text: "\u2713 All notes conform." });
+      b.createDiv({ cls: "okf-empty", text: "\u2713 All notes conform." });
       return;
     }
     const sorted = [...this.results].sort((a, b2) => {
@@ -1155,7 +1162,7 @@ ${entry}
       await (leaf == null ? void 0 : leaf.setViewState({ type: OKF_VIEW_TYPE, active: true }));
     }
     if (leaf) {
-      this.app.workspace.revealLeaf(leaf);
+      void this.app.workspace.revealLeaf(leaf);
       if (this.pendingResults && leaf.view instanceof OkfReportView) {
         leaf.view.setResults(
           this.pendingResults.results,
@@ -1171,89 +1178,306 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
     super(app, plugin);
     this.plugin = plugin;
   }
+  /**
+   * Single source of truth for the settings UI, consumed by both the imperative
+   * display() (Obsidian < 1.13) and the declarative getSettingDefinitions()
+   * (Obsidian 1.13+) so the two paths can never drift.
+   */
+  settingSpecs() {
+    const s = this.plugin.settings;
+    const save = () => void this.plugin.saveSettings();
+    const list = (v) => v.split(",").map((x) => x.trim()).filter(Boolean);
+    return [
+      {
+        name: "Default type for auto-fix",
+        desc: "Value inserted into `type` when fixing notes that lack it.",
+        control: (row) => row.addText(
+          (t) => t.setValue(s.defaultType).onChange((v) => {
+            s.defaultType = v || "Concept";
+            save();
+          })
+        )
+      },
+      {
+        name: "Live check on save / open",
+        desc: "Validate the active note as you edit and when you open it.",
+        control: (row) => row.addToggle(
+          (tg) => tg.setValue(s.liveCheckOnSave).onChange((v) => {
+            s.liveCheckOnSave = v;
+            save();
+          })
+        )
+      },
+      { name: "Automation", heading: true },
+      {
+        name: "Scan vault on startup",
+        desc: "Run a full conformance scan automatically when the plugin loads (deferred until the workspace is ready).",
+        control: (row) => row.addToggle(
+          (tg) => tg.setValue(s.scanOnStartup).onChange((v) => {
+            s.scanOnStartup = v;
+            save();
+          })
+        )
+      },
+      {
+        name: "Fix format issues on save",
+        desc: "When you edit a note, auto-insert missing OKF frontmatter (type/title/timestamp). Non-destructive; never overwrites existing values.",
+        control: (row) => row.addToggle(
+          (tg) => tg.setValue(s.fixOnSave).onChange((v) => {
+            s.fixOnSave = v;
+            save();
+          })
+        )
+      },
+      {
+        name: "Auto-generate index.md",
+        desc: "Regenerate a folder's index.md (\xA76 listing) automatically when its notes change.",
+        control: (row) => row.addToggle(
+          (tg) => tg.setValue(s.autoGenerateIndex).onChange((v) => {
+            s.autoGenerateIndex = v;
+            save();
+          })
+        )
+      },
+      {
+        name: "Batch size",
+        desc: "Files processed per async chunk during scan/fix. Lower = smoother UI on large vaults; higher = faster.",
+        control: (row) => row.addText(
+          (t) => t.setValue(String(s.batchSize)).onChange((v) => {
+            const n = parseInt(v, 10);
+            s.batchSize = isNaN(n) || n < 1 ? 50 : Math.min(n, 1e3);
+            save();
+          })
+        )
+      },
+      { name: "Rules", heading: true },
+      {
+        name: "Warn on missing recommended fields",
+        desc: "title, description, timestamp (\xA74.1).",
+        control: (row) => row.addToggle(
+          (tg) => tg.setValue(s.warnRecommendedFields).onChange((v) => {
+            s.warnRecommendedFields = v;
+            save();
+          })
+        )
+      },
+      {
+        name: "Warn on missing tags",
+        control: (row) => row.addToggle(
+          (tg) => tg.setValue(s.warnTagsField).onChange((v) => {
+            s.warnTagsField = v;
+            save();
+          })
+        )
+      },
+      {
+        name: "Check reserved files (index.md / log.md)",
+        desc: "Validate \xA76 and \xA77 structure.",
+        control: (row) => row.addToggle(
+          (tg) => tg.setValue(s.checkReservedFiles).onChange((v) => {
+            s.checkReservedFiles = v;
+            save();
+          })
+        )
+      },
+      {
+        name: "Excluded folders",
+        desc: "Comma-separated paths skipped during validation.",
+        control: (row) => row.addText(
+          (t) => t.setValue(s.excludeFolders.join(", ")).onChange((v) => {
+            s.excludeFolders = list(v);
+            save();
+          })
+        )
+      },
+      { name: "Portent", heading: true },
+      {
+        name: "Enable Portent validation",
+        desc: "Experimental (beta) \u2014 the Portent spec is pre-1.0 and may still change. Additionally validate notes against the Portent spec (portent.md): default type vocabulary (Project, Operation, Responsibility, Task, Event, Note, Topic, Person), lifecycle metadata (optional and format-free; status / organized / archived, or omitted when organized by default), and relationship shape (belongs_to, related_to as wikilinks). All Portent findings are warnings \u2014 they never block OKF conformance.",
+        control: (row) => row.addToggle(
+          (tg) => tg.setValue(s.enablePortent).onChange((v) => {
+            s.enablePortent = v;
+            save();
+            this.refresh();
+          })
+        )
+      },
+      {
+        name: "Validate type vocabulary",
+        desc: "Warn when `type` is not one of the configured Portent types. Turn off if you use your own type names.",
+        portentDependent: true,
+        control: (row) => row.addToggle(
+          (tg) => tg.setValue(s.portentCheckTypeVocab).onChange((v) => {
+            s.portentCheckTypeVocab = v;
+            save();
+          })
+        )
+      },
+      {
+        name: "Validate lifecycle",
+        desc: "Check lifecycle values when present (status maps to the configured set; `organized`/`archived` are booleans). A missing lifecycle is never flagged.",
+        portentDependent: true,
+        control: (row) => row.addToggle(
+          (tg) => tg.setValue(s.portentCheckLifecycle).onChange((v) => {
+            s.portentCheckLifecycle = v;
+            save();
+          })
+        )
+      },
+      {
+        name: "Validate belongs_to",
+        desc: "Check `belongs_to` shape when present (a single wikilink to the primary parent).",
+        portentDependent: true,
+        control: (row) => row.addToggle(
+          (tg) => tg.setValue(s.portentCheckBelongsTo).onChange((v) => {
+            s.portentCheckBelongsTo = v;
+            save();
+          })
+        )
+      },
+      {
+        name: "Validate related_to",
+        desc: "Check `related_to` shape when present (a list of wikilinks).",
+        portentDependent: true,
+        control: (row) => row.addToggle(
+          (tg) => tg.setValue(s.portentCheckRelatedTo).onChange((v) => {
+            s.portentCheckRelatedTo = v;
+            save();
+          })
+        )
+      },
+      {
+        name: "Portent schema",
+        desc: "Customize the frontmatter keys and vocabularies Portent checks \u2014 track your own conventions or a future spec revision without a plugin update. Leave a field blank to restore its default.",
+        heading: true,
+        portentDependent: true
+      },
+      {
+        name: "Type vocabulary",
+        desc: "Comma-separated accepted `type` values.",
+        portentDependent: true,
+        control: (row) => row.addText(
+          (t) => t.setValue(s.portentTypes.join(", ")).onChange((v) => {
+            const l = list(v);
+            s.portentTypes = l.length ? l : [...PORTENT_TYPES];
+            save();
+          })
+        )
+      },
+      {
+        name: "Lifecycle status field",
+        desc: "Frontmatter key holding the single lifecycle value (default `status`; e.g. rename to `state`).",
+        portentDependent: true,
+        control: (row) => row.addText(
+          (t) => t.setValue(s.portentStatusField).onChange((v) => {
+            s.portentStatusField = v.trim() || "status";
+            save();
+          })
+        )
+      },
+      {
+        name: "Lifecycle status values",
+        desc: "Comma-separated accepted values for the status field.",
+        portentDependent: true,
+        control: (row) => row.addText(
+          (t) => t.setValue(s.portentStatuses.join(", ")).onChange((v) => {
+            const l = list(v);
+            s.portentStatuses = l.length ? l : [...PORTENT_STATUSES];
+            save();
+          })
+        )
+      },
+      {
+        name: "Organized field",
+        desc: "Frontmatter key for the boolean `organized` lifecycle flag.",
+        portentDependent: true,
+        control: (row) => row.addText(
+          (t) => t.setValue(s.portentOrganizedField).onChange((v) => {
+            s.portentOrganizedField = v.trim() || "organized";
+            save();
+          })
+        )
+      },
+      {
+        name: "Archived field",
+        desc: "Frontmatter key for the boolean `archived` lifecycle flag.",
+        portentDependent: true,
+        control: (row) => row.addText(
+          (t) => t.setValue(s.portentArchivedField).onChange((v) => {
+            s.portentArchivedField = v.trim() || "archived";
+            save();
+          })
+        )
+      },
+      {
+        name: "Belongs-to field",
+        desc: "Frontmatter key for the single-parent relationship (a wikilink).",
+        portentDependent: true,
+        control: (row) => row.addText(
+          (t) => t.setValue(s.portentBelongsToField).onChange((v) => {
+            s.portentBelongsToField = v.trim() || "belongs_to";
+            save();
+          })
+        )
+      },
+      {
+        name: "Related-to field",
+        desc: "Frontmatter key for the related-notes relationship (a list of wikilinks).",
+        portentDependent: true,
+        control: (row) => row.addText(
+          (t) => t.setValue(s.portentRelatedToField).onChange((v) => {
+            s.portentRelatedToField = v.trim() || "related_to";
+            save();
+          })
+        )
+      }
+    ];
+  }
+  /** Apply one spec to a Setting row — shared by the imperative and declarative paths. */
+  applySpec(row, spec) {
+    var _a;
+    row.setName(spec.name);
+    if (spec.desc) row.setDesc(spec.desc);
+    if (spec.heading) {
+      row.setHeading();
+    } else {
+      (_a = spec.control) == null ? void 0 : _a.call(spec, row);
+    }
+    if (spec.portentDependent && !this.plugin.settings.enablePortent) {
+      row.setDisabled(true);
+    }
+  }
+  /** Imperative rendering — Obsidian < 1.13's dual-support fallback. */
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    new import_obsidian3.Setting(containerEl).setName("Default type for auto-fix").setDesc("Value inserted into `type` when fixing notes that lack it.").addText(
-      (t) => t.setValue(this.plugin.settings.defaultType).onChange(async (v) => {
-        this.plugin.settings.defaultType = v || "Concept";
-        await this.plugin.saveSettings();
+    for (const spec of this.settingSpecs()) {
+      this.applySpec(new import_obsidian3.Setting(containerEl), spec);
+    }
+  }
+  /**
+   * Declarative settings — Obsidian 1.13+ renders from these definitions (and
+   * indexes them for settings search) instead of calling display(). Each row
+   * delegates to the same builders display() uses, so behavior and the Portent
+   * enable/disable dependency stay identical across both paths.
+   */
+  getSettingDefinitions() {
+    return this.settingSpecs().map(
+      (spec) => ({
+        name: spec.name,
+        desc: spec.desc,
+        searchable: !spec.heading,
+        render: (row) => {
+          this.applySpec(row, spec);
+        }
       })
     );
-    new import_obsidian3.Setting(containerEl).setName("Live check on save / open").setDesc("Validate the active note as you edit and when you open it.").addToggle(
-      (tg) => tg.setValue(this.plugin.settings.liveCheckOnSave).onChange(async (v) => {
-        this.plugin.settings.liveCheckOnSave = v;
-        await this.plugin.saveSettings();
-      })
-    );
-    new import_obsidian3.Setting(containerEl).setName("Automation").setHeading();
-    new import_obsidian3.Setting(containerEl).setName("Scan vault on startup").setDesc(
-      "Run a full conformance scan automatically when the plugin loads (deferred until the workspace is ready)."
-    ).addToggle(
-      (tg) => tg.setValue(this.plugin.settings.scanOnStartup).onChange(async (v) => {
-        this.plugin.settings.scanOnStartup = v;
-        await this.plugin.saveSettings();
-      })
-    );
-    new import_obsidian3.Setting(containerEl).setName("Fix format issues on save").setDesc(
-      "When you edit a note, auto-insert missing OKF frontmatter (type/title/timestamp). Non-destructive; never overwrites existing values."
-    ).addToggle(
-      (tg) => tg.setValue(this.plugin.settings.fixOnSave).onChange(async (v) => {
-        this.plugin.settings.fixOnSave = v;
-        await this.plugin.saveSettings();
-      })
-    );
-    new import_obsidian3.Setting(containerEl).setName("Auto-generate index.md").setDesc(
-      "Regenerate a folder's index.md (\xA76 listing) automatically when its notes change."
-    ).addToggle(
-      (tg) => tg.setValue(this.plugin.settings.autoGenerateIndex).onChange(async (v) => {
-        this.plugin.settings.autoGenerateIndex = v;
-        await this.plugin.saveSettings();
-      })
-    );
-    new import_obsidian3.Setting(containerEl).setName("Batch size").setDesc(
-      "Files processed per async chunk during scan/fix. Lower = smoother UI on large vaults; higher = faster."
-    ).addText(
-      (t) => t.setValue(String(this.plugin.settings.batchSize)).onChange(async (v) => {
-        const n = parseInt(v, 10);
-        this.plugin.settings.batchSize = isNaN(n) || n < 1 ? 50 : Math.min(n, 1e3);
-        await this.plugin.saveSettings();
-      })
-    );
-    new import_obsidian3.Setting(containerEl).setName("Rules").setHeading();
-    new import_obsidian3.Setting(containerEl).setName("Warn on missing recommended fields").setDesc("title, description, timestamp (\xA74.1).").addToggle(
-      (tg) => tg.setValue(this.plugin.settings.warnRecommendedFields).onChange(async (v) => {
-        this.plugin.settings.warnRecommendedFields = v;
-        await this.plugin.saveSettings();
-      })
-    );
-    new import_obsidian3.Setting(containerEl).setName("Warn on missing tags").addToggle(
-      (tg) => tg.setValue(this.plugin.settings.warnTagsField).onChange(async (v) => {
-        this.plugin.settings.warnTagsField = v;
-        await this.plugin.saveSettings();
-      })
-    );
-    new import_obsidian3.Setting(containerEl).setName("Check reserved files (index.md / log.md)").setDesc("Validate \xA76 and \xA77 structure.").addToggle(
-      (tg) => tg.setValue(this.plugin.settings.checkReservedFiles).onChange(async (v) => {
-        this.plugin.settings.checkReservedFiles = v;
-        await this.plugin.saveSettings();
-      })
-    );
-    new import_obsidian3.Setting(containerEl).setName("Excluded folders").setDesc("Comma-separated paths skipped during validation.").addText(
-      (t) => t.setValue(this.plugin.settings.excludeFolders.join(", ")).onChange(async (v) => {
-        this.plugin.settings.excludeFolders = v.split(",").map((s) => s.trim()).filter(Boolean);
-        await this.plugin.saveSettings();
-      })
-    );
-    new import_obsidian3.Setting(containerEl).setName("Portent").setHeading();
-    new import_obsidian3.Setting(containerEl).setName("Enable Portent validation").setDesc(
-      "Additionally validate notes against the Portent spec (portent.md): default type vocabulary (Project, Operation, Responsibility, Task, Event, Note, Topic, Person), lifecycle metadata (status / organized / archived), and relationship shape (belongs_to, related_to as wikilinks). All Portent findings are warnings \u2014 they never block OKF conformance."
-    ).addToggle(
-      (tg) => tg.setValue(this.plugin.settings.enablePortent).onChange(async (v) => {
-        this.plugin.settings.enablePortent = v;
-        await this.plugin.saveSettings();
-      })
-    );
+  }
+  /** Re-render after toggling Portent: update() on 1.13+, display() on older. */
+  refresh() {
+    const tab = this;
+    if (typeof tab.update === "function") tab.update();
+    else this.display();
   }
 };
 var OkfPromptModal = class extends import_obsidian3.Modal {

@@ -1,6 +1,6 @@
 {
   "name": "okf-enforcer",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Validate and enforce the Open Knowledge Format (OKF v0.1) in Obsidian.",
   "main": "main.js",
   "scripts": {
@@ -19,7 +19,7 @@
   "devDependencies": {
     "@types/node": "^20.11.0",
     "esbuild": "0.28.1",
-    "obsidian": "1.5.7",
+    "obsidian": "1.7.2",
     "typescript": "5.4.5"
   }
 }
