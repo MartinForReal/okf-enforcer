@@ -4,6 +4,14 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-07-18
+
+### Changed
+- Re-release of 0.2.1 under a fresh tag. The `0.2.1` tag was first published
+  against the wrong commit; the tag was corrected afterward, but downstream
+  caches may have pinned the original, so this tag supersedes it. No code
+  changes since 0.2.1.
+
 ## [0.2.1] - 2026-07-17
 
 > **Portent support is experimental (beta).** The [Portent](https://portent.md)
