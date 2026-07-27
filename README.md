@@ -4,20 +4,23 @@
 [![Release](https://img.shields.io/github/v/release/MartinForReal/okf-enforcer?display_name=tag&sort=semver)](https://github.com/MartinForReal/okf-enforcer/releases/latest)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-An [Obsidian](https://obsidian.md) plugin that validates and enforces the **Open Knowledge Format (OKF) v0.1** across your vault — keeping every note self-describing, agent-readable, and portable.
+An [Obsidian](https://obsidian.md) plugin that validates and enforces the **Open Knowledge Format (OKF) v0.2** across your vault — keeping every note self-describing, agent-readable, and portable.
 
-OKF is an open, minimal convention for representing knowledge as a directory of Markdown files with YAML frontmatter. Its one hard rule: every non-reserved note carries a parseable frontmatter block with a non-empty `type`. This plugin makes following that effortless. See the [OKF specification](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md).
+OKF is an open, minimal convention for representing knowledge as a directory of Markdown files with YAML frontmatter. Its one hard rule: every non-reserved note carries a parseable frontmatter block with a non-empty `type`. v0.2 adds first-class **provenance, trust, lifecycle, and attestation** on top of that, while staying backward-compatible with v0.1 bundles. This plugin makes following the format effortless. See the [OKF specification](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md).
 
 ## Features
 
-- **Conformance validation.** Checks every note against OKF v0.1. Spec §9 rules (parseable frontmatter, non-empty `type`, valid `index.md`/`log.md` structure) are reported as **errors**; the spec's recommended fields and SHOULD-guidance are **warnings** you can toggle. The spec's permissive rules are respected — broken links and missing optional fields never fail a bundle.
+- **Conformance validation.** Checks every note against OKF v0.2. The hard rules (parseable frontmatter, non-empty `type`, valid `index.md`/`log.md` structure — §11/§8/§9) are reported as **errors**; the spec's recommended fields and SHOULD-guidance are **warnings** you can toggle. The spec's permissive rules are respected — broken links and missing optional fields never fail a bundle.
+- **Trust & provenance (v0.2).** Opt-in checks for the §5 families: `generated`/`verified` and the actor convention, derived trust tiers (unverified / machine-confirmed / human-reviewed), `status` (`draft|stable|deprecated`), `stale_after`, and `sources` with its credibility signals.
+- **Attested Computation (v0.2).** Validates `type: Attested Computation` concepts (§10) — a required `runtime`, a present computation (inline `# Computation` fence or a `computation` path), and `parameters`/`executor`/`attester` shape.
+- **v0.1 → v0.2 migration.** A command rewrites a legacy `timestamp` into `generated: { by, at }` and lifts a body `# Citations` list into `sources`, then offers to declare `okf_version: "0.2"` in the root index.
 - **Vault-wide report.** A compact, collapsible side panel lists every non-conformant note, errors first, with a one-line summary of conformant / error / warning counts. Hidden by default; opens only on demand.
 - **Status-bar indicator.** A single status-bar item shows the active note's state (`✓` / `⚠` / `✖`) with details in its tooltip. Click it to auto-fix the current note.
-- **Auto-fix.** Inserts missing frontmatter (`type`, `title`, `timestamp`) non-destructively — it never overwrites values you've set.
+- **Auto-fix.** Inserts missing frontmatter (`type`, `title`, `generated`) non-destructively — it never overwrites values you've set.
 - **Prompt for required fields.** When a note is missing a meaningful `type`, a dialog lets you set `type`, `title`, and `description` directly.
 - **On-save & on-create hooks.** New notes, edited notes, and notes added by the **Importer** plugin are brought into conformance automatically.
-- **`index.md` generation.** Builds and refreshes OKF §6 directory listings so each folder is self-describing.
-- **`log.md` entries.** Adds dated §7 changelog entries.
+- **`index.md` generation.** Builds and refreshes OKF §8 directory listings (writing `okf_version` into the root index) so each folder is self-describing.
+- **`log.md` entries.** Adds dated §9 changelog entries.
 - **Portent layer (opt-in, beta).** Optionally layer the [Portent](https://portent.md) knowledge-base spec on top of OKF — type vocabulary, lifecycle, and `belongs_to`/`related_to` relationships — surfaced as non-blocking warnings. The schema is fully free-form: rename fields (e.g. `status` → `state`), redefine the accepted vocabularies, and toggle each check independently, so you can match your own conventions or track the evolving pre-1.0 spec.
 - **Large-vault friendly.** Scans and fixes run through a batched, non-blocking queue with an inline progress bar — the UI never freezes.
 
@@ -31,9 +34,10 @@ Open the command palette and search for **OKF**:
 | Validate active note | Check the current note |
 | Fix active note | Insert missing OKF frontmatter |
 | Fix all auto-fixable issues in vault | Bulk auto-fix |
-| Generate/refresh index.md for a folder | Build the §6 listing for the active note's folder |
+| Migrate note to latest OKF | Rewrite `timestamp`→`generated` and `# Citations`→`sources` |
+| Generate/refresh index.md for a folder | Build the §8 listing for the active note's folder |
 | Generate/refresh index.md for ALL folders | Build listings vault-wide |
-| Add log.md entry (current folder) | Append a dated §7 changelog entry |
+| Add log.md entry (current folder) | Append a dated §9 changelog entry |
 
 Clicking the status-bar item auto-fixes the active note and, if a required field is still missing, prompts you to fill it.
 
@@ -42,9 +46,10 @@ Clicking the status-bar item auto-fixes the active note and, if a required field
 Configure under **Settings → OKF Enforcer**:
 
 - **Default type for auto-fix** — value inserted into `type` when fixing notes that lack it.
-- **Live check on save / open**, **Scan vault on startup**, **Fix format issues on save**, **Auto-generate index.md** — automation toggles.
+- **Default actor for `generated.by`** — the actor recorded when auto-fix adds a `generated` block (e.g. `okf-enforcer/0.3` or `human:<id>`).
+- **Live check on save / open**, **Scan vault on startup**, **Fix format issues on save**, **Auto-generate index.md**, **Auto-migrate to latest OKF on fix** — automation toggles.
 - **Batch size** — files processed per async chunk (lower = smoother UI on very large vaults).
-- **Warn on missing recommended fields / tags**, **Check reserved files** — which warnings to surface.
+- **Warn on missing recommended fields / tags**, **Validate trust & lifecycle fields**, **Validate Attested Computation concepts**, **Check reserved files** — which checks to surface.
 - **Excluded folders** — paths skipped during validation (default: `Templates`). The Obsidian config folder (e.g. `.obsidian`) is always skipped automatically.
 - **Enable Portent validation** _(experimental / beta — the Portent spec is pre-1.0 and may change)_ — layer the [Portent](https://portent.md) spec on top of OKF: default type vocabulary (`Project`, `Operation`, `Responsibility`, `Task`, `Event`, `Note`, `Topic`, `Person`), lifecycle metadata (optional and format-free — a single `status`/`state` value, boolean `organized`/`archived`, or omitted entirely when organized by default), and relationship shape (`belongs_to` single wikilink, `related_to` list of wikilinks). All Portent findings are warnings — they never break OKF conformance.
 - **Portent schema** — with Portent validation enabled, every property name and vocabulary is free-form. Remap each concept onto your vault's own frontmatter keys (e.g. rename the lifecycle field `status` → `state`) and set the accepted `type` and status values, so you can follow your own conventions or a future spec revision without waiting for a plugin update. Leave any field blank to restore its default. Each optional check — type vocabulary, lifecycle, `belongs_to`, and `related_to` — can be toggled on or off individually.

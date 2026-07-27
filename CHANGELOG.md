@@ -4,6 +4,44 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-07-27
+
+Targets **OKF v0.2** (was v0.1). A v0.2 consumer still accepts v0.1 bundles via
+the fallbacks below, so existing vaults keep validating.
+
+### Added
+- **Provenance / trust / lifecycle validation** (§5), opt-in via **Validate trust
+  & lifecycle fields**. When present, checks `generated`/`verified` shape and the
+  actor convention (`<producer>/<version>`, `human:<id>`, `process:<id>`), derives
+  trust tiers (unverified / machine-confirmed / human-reviewed), and validates
+  `status` (`draft|stable|deprecated`), `stale_after` (absolute date), and
+  `sources` with its credibility signals (`author`/`usage_count`/`last_modified`).
+- **Attested Computation concepts** (§10). A `type: Attested Computation` note is
+  checked for a required `runtime`, a present computation (inline `# Computation`
+  fence or a `computation` path), and `parameters`/`executor`/`attester` shape.
+  Toggle under **Validate Attested Computation concepts**.
+- **v0.1 → v0.2 migration** — the "Migrate note to latest OKF" command (and, by
+  default, ordinary auto-fix / fix-on-save) rewrites a legacy `timestamp` into
+  `generated: { by, at }` and lifts a body `# Citations` list into `sources`.
+  Auto-migration is toggled by **Auto-migrate to latest OKF on fix** (on by
+  default); turn it off to keep migrations manual via the command.
+- **Configurable `generated.by` actor** — auto-fix now writes a `generated` block;
+  the actor it records is set by **Default actor for `generated.by`**.
+
+### Changed
+- **`timestamp` → `generated: { by, at }`** (§13.1). Auto-fix writes `generated`
+  for new notes; a legacy `timestamp` is accepted as a fallback and surfaces a
+  migrate hint instead of a "missing" warning.
+- **Body `# Citations` → `sources`** (§13.1). A legacy `# Citations` list is
+  recognized and offered for migration; provenance now lives in frontmatter.
+- Root `index.md` may declare `okf_version` `0.1` or `0.2`; index generation writes
+  `okf_version: "0.2"` into the root index. Section references in the report updated
+  to v0.2 numbering (index §8, log §9, conformance §11, versioning §12).
+
+### Internal
+- Portent validation is isolated in its own `portent.ts` module (vocabulary,
+  settings, and checks); `OkfSettings` composes `PortentSettings`. Behavior-neutral.
+
 ## [0.2.2] - 2026-07-18
 
 ### Changed
@@ -128,6 +166,7 @@ Initial release.
 - Batched, non-blocking scan/fix queue with an inline progress bar for large vaults.
 - Settings for automation toggles, batch size, warning rules, and excluded folders.
 
+[0.3.0]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.3.0
 [0.1.3]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.1.3
 [0.1.2]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.1.2
 [0.1.1]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.1.1

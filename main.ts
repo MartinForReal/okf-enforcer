@@ -20,9 +20,9 @@ import {
   isExcluded,
   basename,
   OkfIssue,
-  PORTENT_TYPES,
-  PORTENT_STATUSES,
+  OKF_VERSION,
 } from "./validator";
+import { PORTENT_TYPES, PORTENT_STATUSES } from "./portent";
 import { OkfReportView, OKF_VIEW_TYPE, FileResult } from "./report-view";
 
 export default class OkfPlugin extends Plugin {
@@ -112,6 +112,16 @@ export default class OkfPlugin extends Plugin {
         const f = this.app.workspace.getActiveFile();
         if (!f || !(f.parent instanceof TFolder)) return false;
         if (!checking) void this.addLogEntry(f.parent);
+        return true;
+      },
+    });
+    this.addCommand({
+      id: "okf-migrate-v01-v02",
+      name: "Migrate note to latest OKF",
+      checkCallback: (checking) => {
+        const f = this.app.workspace.getActiveFile();
+        if (!f || f.extension !== "md" || isReserved(f.path)) return false;
+        if (!checking) void this.migrateActive(f);
         return true;
       },
     });
@@ -303,7 +313,7 @@ export default class OkfPlugin extends Plugin {
     );
     const hadRequiredError = preIssues.some((i) => i.severity === "error");
 
-    // Auto-fix structure (frontmatter block, placeholder type, title, timestamp).
+    // Auto-fix structure (frontmatter block, placeholder type, title, generated).
     await this.fixFile(file, false);
 
     content = await this.app.vault.read(file);
@@ -371,7 +381,7 @@ export default class OkfPlugin extends Plugin {
     if (issues.length === 0) {
       this.statusEl.setAttribute(
         "aria-label",
-        "Active note conforms to OKF v0.1 — click to scan the vault"
+        "Active note conforms to OKF v0.2 — click to scan the vault"
       );
     } else {
       const lines = issues
@@ -391,7 +401,7 @@ export default class OkfPlugin extends Plugin {
     const ok = scanned - errFiles - warnFiles;
     this.statusEl.setAttribute(
       "aria-label",
-      `OKF v0.1 — ${scanned} notes scanned\n✓ ${ok} conformant\n✖ ${errFiles} with errors\n⚠ ${warnFiles} warnings only\n\nClick to open the report`
+      `OKF v0.2 — ${scanned} notes scanned\n✓ ${ok} conformant\n✖ ${errFiles} with errors\n⚠ ${warnFiles} warnings only\n\nClick to open the report`
     );
   }
 
@@ -465,7 +475,8 @@ export default class OkfPlugin extends Plugin {
       file.path,
       content,
       issues,
-      this.settings
+      this.settings,
+      this.settings.autoMigrateOnFix
     );
     if (applied.length > 0 && fixed !== content) {
       this.selfWrites.add(file.path);
@@ -476,6 +487,35 @@ export default class OkfPlugin extends Plugin {
     }
     if (notify) new Notice("OKF: nothing auto-fixable on this note.");
     return 0;
+  }
+
+  /**
+   * Migrate a note from OKF v0.1 to v0.2 (§13): rename `timestamp` → `generated`
+   * and lift a body `# Citations` list into `sources`. Runs the migration fixes
+   * that ordinary save-time auto-fix deliberately skips.
+   */
+  async migrateActive(file: TFile) {
+    const content = await this.app.vault.read(file);
+    const issues = validateContent(
+      file.path,
+      content,
+      this.isRoot(file),
+      this.settings
+    );
+    const { content: fixed, applied } = applyFixes(
+      file.path,
+      content,
+      issues,
+      this.settings,
+      true
+    );
+    if (applied.length > 0 && fixed !== content) {
+      this.selfWrites.add(file.path);
+      await this.app.vault.modify(file, fixed);
+      new Notice(`OKF migrated ${file.basename}: ${applied.join(", ")}`);
+    } else {
+      new Notice("OKF: nothing to migrate — note already uses v0.2 fields.");
+    }
   }
 
   /**
@@ -572,6 +612,11 @@ export default class OkfPlugin extends Plugin {
       folder.path === "/" || folder.path === ""
         ? "index.md"
         : `${folder.path}/index.md`;
+    // The bundle-root index.md is the only place `okf_version` frontmatter is
+    // allowed (§8, §12); non-root indexes stay frontmatter-free.
+    if (indexPath === "index.md") {
+      out = `---\nokf_version: "${OKF_VERSION}"\n---\n\n${out}`;
+    }
     const existing = this.app.vault.getAbstractFileByPath(indexPath);
     if (existing instanceof TFile) {
       const current = await this.app.vault.read(existing);
@@ -729,6 +774,17 @@ class OkfSettingTab extends PluginSettingTab {
           ),
       },
       {
+        name: "Default actor for `generated.by`",
+        desc: "Actor written when auto-fix adds a `generated` block (§7). Use `<producer>/<version>` (e.g. `okf-enforcer/0.3`) or `human:<id>`.",
+        control: (row) =>
+          row.addText((t) =>
+            t.setValue(s.defaultActor).onChange((v) => {
+              s.defaultActor = v.trim() || "okf-enforcer/0.3";
+              save();
+            })
+          ),
+      },
+      {
         name: "Live check on save / open",
         desc: "Validate the active note as you edit and when you open it.",
         control: (row) =>
@@ -753,7 +809,7 @@ class OkfSettingTab extends PluginSettingTab {
       },
       {
         name: "Fix format issues on save",
-        desc: "When you edit a note, auto-insert missing OKF frontmatter (type/title/timestamp). Non-destructive; never overwrites existing values.",
+        desc: "When you edit a note, auto-insert missing OKF frontmatter (type/title/generated). Non-destructive; never overwrites existing values.",
         control: (row) =>
           row.addToggle((tg) =>
             tg.setValue(s.fixOnSave).onChange((v) => {
@@ -764,11 +820,22 @@ class OkfSettingTab extends PluginSettingTab {
       },
       {
         name: "Auto-generate index.md",
-        desc: "Regenerate a folder's index.md (§6 listing) automatically when its notes change.",
+        desc: "Regenerate a folder's index.md (§8 listing) automatically when its notes change.",
         control: (row) =>
           row.addToggle((tg) =>
             tg.setValue(s.autoGenerateIndex).onChange((v) => {
               s.autoGenerateIndex = v;
+              save();
+            })
+          ),
+      },
+      {
+        name: "Auto-migrate to latest OKF on fix",
+        desc: "Let auto-fix (and fix-on-save) also upgrade notes to the latest OKF version — e.g. rewrite legacy `timestamp` → `generated` and lift `# Citations` → `sources`. On by default. Turn off to keep migrations manual via the \"Migrate note to latest OKF\" command, since they rewrite existing content.",
+        control: (row) =>
+          row.addToggle((tg) =>
+            tg.setValue(s.autoMigrateOnFix).onChange((v) => {
+              s.autoMigrateOnFix = v;
               save();
             })
           ),
@@ -788,11 +855,33 @@ class OkfSettingTab extends PluginSettingTab {
       { name: "Rules", heading: true },
       {
         name: "Warn on missing recommended fields",
-        desc: "title, description, timestamp (§4.1).",
+        desc: "title, description, generated (§4.1, §5.2).",
         control: (row) =>
           row.addToggle((tg) =>
             tg.setValue(s.warnRecommendedFields).onChange((v) => {
               s.warnRecommendedFields = v;
+              save();
+            })
+          ),
+      },
+      {
+        name: "Validate trust & lifecycle fields",
+        desc: "When present, check the v0.2 families: `verified` shape + actors, `status` vocabulary, `stale_after` date, and `sources` (§5). Advisory — off by default.",
+        control: (row) =>
+          row.addToggle((tg) =>
+            tg.setValue(s.warnTrustFields).onChange((v) => {
+              s.warnTrustFields = v;
+              save();
+            })
+          ),
+      },
+      {
+        name: "Validate Attested Computation concepts",
+        desc: "Check `type: Attested Computation` notes (§10): required `runtime`, a present computation, and `parameters`/`executor`/`attester` shape.",
+        control: (row) =>
+          row.addToggle((tg) =>
+            tg.setValue(s.checkAttestedComputation).onChange((v) => {
+              s.checkAttestedComputation = v;
               save();
             })
           ),
