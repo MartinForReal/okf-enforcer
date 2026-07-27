@@ -26,6 +26,8 @@ var import_obsidian3 = require("obsidian");
 
 // validator.ts
 var import_obsidian = require("obsidian");
+
+// portent.ts
 var PORTENT_TYPES = [
   "Project",
   "Operation",
@@ -37,18 +39,7 @@ var PORTENT_TYPES = [
   "Person"
 ];
 var PORTENT_STATUSES = ["captured", "organized", "archived"];
-var DEFAULT_SETTINGS = {
-  defaultType: "Concept",
-  warnRecommendedFields: true,
-  warnTagsField: false,
-  warnBrokenLinks: false,
-  checkReservedFiles: true,
-  liveCheckOnSave: true,
-  scanOnStartup: true,
-  fixOnSave: true,
-  autoGenerateIndex: true,
-  batchSize: 50,
-  excludeFolders: ["Templates"],
+var PORTENT_DEFAULTS = {
   enablePortent: false,
   portentTypes: [...PORTENT_TYPES],
   portentStatusField: "status",
@@ -63,122 +54,12 @@ var DEFAULT_SETTINGS = {
   portentCheckRelatedTo: true
 };
 var WIKILINK_RE = /^\[\[[^[\]]+?\]\]$/;
-var FM_RE = /^---\r?\n([\s\S]*?)\r?\n---/;
-var ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-function basename(path) {
-  const f = path.split("/").pop() || path;
-  return f.replace(/\.md$/i, "");
-}
-function isReserved(path) {
-  const f = (path.split("/").pop() || "").toLowerCase();
-  if (f === "index.md") return "index";
-  if (f === "log.md") return "log";
-  return null;
-}
-function isExcluded(path, settings) {
-  return settings.excludeFolders.some(
-    (folder) => folder && (path === folder || path.startsWith(folder + "/"))
-  );
-}
-function splitFrontmatter(content) {
-  const m = content.match(FM_RE);
-  if (!m) return { hasFm: false, raw: "", body: content };
-  return { hasFm: true, raw: m[1], body: content.slice(m[0].length) };
-}
-function validateContent(path, content, isRoot, settings) {
-  const reserved = isReserved(path);
-  if (reserved === "index") return validateIndex(content, isRoot, settings);
-  if (reserved === "log") return validateLog(content, settings);
-  return validateConcept(path, content, settings);
-}
-function validateConcept(path, content, settings) {
-  const issues = [];
-  const { hasFm, raw } = splitFrontmatter(content);
-  if (!hasFm) {
-    issues.push({
-      severity: "error",
-      rule: "\xA79.1",
-      message: "No YAML frontmatter block. Every OKF concept must begin with a `---` delimited frontmatter block.",
-      fix: "add-frontmatter"
-    });
-    return issues;
-  }
-  let data = {};
-  try {
-    const parsed = (0, import_obsidian.parseYaml)(raw);
-    if (parsed && typeof parsed === "object") {
-      data = parsed;
-    }
-  } catch (e) {
-    issues.push({
-      severity: "error",
-      rule: "\xA79.1",
-      message: `Frontmatter is not parseable YAML: ${e.message || e}`
-    });
-    return issues;
-  }
-  const type = data["type"];
-  const typeOk = typeof type === "string" && type.trim().length > 0;
-  if (!typeOk) {
-    const issue = {
-      severity: "error",
-      rule: "\xA79.2",
-      message: "`type` field is present but empty. It must be a non-empty string."
-    };
-    if (type === void 0) {
-      issue.message = "Missing required `type` field.";
-      issue.fix = "add-type";
-    } else if (Array.isArray(type)) {
-      issue.message = "`type` must be a single string, not a list (OKF \xA74.1 \u2014 only `tags` is list-valued).";
-    } else if (typeof type !== "string") {
-      issue.message = "`type` must be a non-empty string (OKF \xA74.1).";
-    } else {
-      issue.fix = "add-type";
-    }
-    issues.push(issue);
-  }
-  if (settings.warnRecommendedFields) {
-    if (!hasNonEmpty(data, "title")) {
-      issues.push({
-        severity: "warning",
-        rule: "\xA74.1",
-        message: "Recommended `title` missing. Consumers may fall back to the filename.",
-        fix: "add-title"
-      });
-    }
-    if (!hasNonEmpty(data, "description")) {
-      issues.push({
-        severity: "warning",
-        rule: "\xA74.1",
-        message: "Recommended `description` (one-line summary) missing. Used in index listings, search snippets, and previews."
-      });
-    }
-    if (!hasNonEmpty(data, "timestamp")) {
-      issues.push({
-        severity: "warning",
-        rule: "\xA74.1",
-        message: "Recommended `timestamp` (ISO 8601 last-modified) missing.",
-        fix: "add-timestamp"
-      });
-    } else if (typeof data["timestamp"] === "string" && isNaN(Date.parse(data["timestamp"]))) {
-      issues.push({
-        severity: "warning",
-        rule: "\xA74.1",
-        message: "`timestamp` is not a parseable ISO 8601 datetime."
-      });
-    }
-  }
-  if (settings.warnTagsField && !("tags" in data)) {
-    issues.push({
-      severity: "warning",
-      rule: "\xA74.1",
-      message: "Recommended `tags` list missing."
-    });
-  }
-  if (settings.enablePortent) {
-    issues.push(...validatePortent(data, settings));
-  }
-  return issues;
+function hasNonEmpty(data, key) {
+  const v = data[key];
+  if (v === void 0 || v === null) return false;
+  if (typeof v === "string") return v.trim().length > 0;
+  if (Array.isArray(v)) return v.length > 0;
+  return true;
 }
 function validatePortent(data, settings) {
   const issues = [];
@@ -273,6 +154,373 @@ function validatePortent(data, settings) {
   }
   return issues;
 }
+
+// validator.ts
+var OKF_VERSION = "0.2";
+var OKF_KNOWN_VERSIONS = ["0.1", "0.2"];
+var OKF_STATUSES = ["draft", "stable", "deprecated"];
+var ACTOR_RE = /^(human:.+|process:.+|[^/\s]+\/[^/\s]+)$/;
+var ISO_DATETIME_RE = /^\d{4}-\d{2}-\d{2}T/;
+var DEFAULT_SETTINGS = {
+  defaultType: "Concept",
+  defaultActor: "okf-enforcer/0.3",
+  warnRecommendedFields: true,
+  warnTrustFields: false,
+  checkAttestedComputation: true,
+  warnTagsField: false,
+  warnBrokenLinks: false,
+  checkReservedFiles: true,
+  liveCheckOnSave: true,
+  scanOnStartup: true,
+  fixOnSave: true,
+  autoGenerateIndex: true,
+  autoMigrateOnFix: true,
+  batchSize: 50,
+  excludeFolders: ["Templates"],
+  ...PORTENT_DEFAULTS
+};
+var FM_RE = /^---\r?\n([\s\S]*?)\r?\n---/;
+var ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+function normalizeVerified(data) {
+  const v = data["verified"];
+  if (v === void 0 || v === null) return [];
+  if (Array.isArray(v)) return v.filter((e) => e && typeof e === "object");
+  if (typeof v === "object") return [v];
+  return [];
+}
+function basename(path) {
+  const f = path.split("/").pop() || path;
+  return f.replace(/\.md$/i, "");
+}
+function isReserved(path) {
+  const f = (path.split("/").pop() || "").toLowerCase();
+  if (f === "index.md") return "index";
+  if (f === "log.md") return "log";
+  return null;
+}
+function isExcluded(path, settings) {
+  return settings.excludeFolders.some(
+    (folder) => folder && (path === folder || path.startsWith(folder + "/"))
+  );
+}
+function splitFrontmatter(content) {
+  const m = content.match(FM_RE);
+  if (!m) return { hasFm: false, raw: "", body: content };
+  return { hasFm: true, raw: m[1], body: content.slice(m[0].length) };
+}
+function validateContent(path, content, isRoot, settings) {
+  const reserved = isReserved(path);
+  if (reserved === "index") return validateIndex(content, isRoot, settings);
+  if (reserved === "log") return validateLog(content, settings);
+  return validateConcept(path, content, settings);
+}
+function validateConcept(path, content, settings) {
+  const issues = [];
+  const { hasFm, raw } = splitFrontmatter(content);
+  if (!hasFm) {
+    issues.push({
+      severity: "error",
+      rule: "\xA711",
+      message: "No YAML frontmatter block. Every OKF concept must begin with a `---` delimited frontmatter block.",
+      fix: "add-frontmatter"
+    });
+    return issues;
+  }
+  let data = {};
+  try {
+    const parsed = (0, import_obsidian.parseYaml)(raw);
+    if (parsed && typeof parsed === "object") {
+      data = parsed;
+    }
+  } catch (e) {
+    issues.push({
+      severity: "error",
+      rule: "\xA711",
+      message: `Frontmatter is not parseable YAML: ${e.message || e}`
+    });
+    return issues;
+  }
+  const type = data["type"];
+  const typeOk = typeof type === "string" && type.trim().length > 0;
+  if (!typeOk) {
+    const issue = {
+      severity: "error",
+      rule: "\xA711",
+      message: "`type` field is present but empty. It must be a non-empty string."
+    };
+    if (type === void 0) {
+      issue.message = "Missing required `type` field.";
+      issue.fix = "add-type";
+    } else if (Array.isArray(type)) {
+      issue.message = "`type` must be a single string, not a list (OKF \xA74.1 \u2014 only `tags` is list-valued).";
+    } else if (typeof type !== "string") {
+      issue.message = "`type` must be a non-empty string (OKF \xA74.1).";
+    } else {
+      issue.fix = "add-type";
+    }
+    issues.push(issue);
+  }
+  if (settings.warnRecommendedFields) {
+    if (!hasNonEmpty2(data, "title")) {
+      issues.push({
+        severity: "warning",
+        rule: "\xA74.1",
+        message: "Recommended `title` missing. Consumers may fall back to the filename.",
+        fix: "add-title"
+      });
+    }
+    if (!hasNonEmpty2(data, "description")) {
+      issues.push({
+        severity: "warning",
+        rule: "\xA74.1",
+        message: "Recommended `description` (one-line summary) missing. Used in index listings, search snippets, and previews."
+      });
+    }
+    const generated = data["generated"];
+    const hasGenerated = generated !== null && typeof generated === "object";
+    const legacyTs = data["timestamp"];
+    const hasLegacyTs = typeof legacyTs === "string" && legacyTs.length > 0;
+    if (hasGenerated) {
+      const g = generated;
+      if (!hasNonEmpty2(g, "by")) {
+        issues.push({
+          severity: "warning",
+          rule: "\xA75.2",
+          message: "`generated.by` (an actor) is required within `generated`."
+        });
+      } else if (!ACTOR_RE.test(String(g["by"]).trim())) {
+        issues.push({
+          severity: "warning",
+          rule: "\xA77",
+          message: "`generated.by` should follow the actor convention: `<producer>/<version>`, `human:<id>`, or `process:<id>`."
+        });
+      }
+      if (g["at"] !== void 0 && !ISO_DATETIME_RE.test(String(g["at"]))) {
+        issues.push({
+          severity: "warning",
+          rule: "\xA75.2",
+          message: "`generated.at` is not a parseable ISO 8601 datetime."
+        });
+      }
+    } else if (hasLegacyTs) {
+      issues.push({
+        severity: "warning",
+        rule: "\xA713.1",
+        message: 'Legacy `timestamp` found. OKF v0.2 records this as `generated: { by, at }` \u2014 run "Migrate note to OKF v0.2".',
+        fix: "migrate-timestamp"
+      });
+    } else {
+      issues.push({
+        severity: "warning",
+        rule: "\xA75.2",
+        message: "Recommended `generated: { by, at }` missing (records who produced the content and when).",
+        fix: "add-generated"
+      });
+    }
+  }
+  if (settings.warnTagsField && !("tags" in data)) {
+    issues.push({
+      severity: "warning",
+      rule: "\xA74.1",
+      message: "Recommended `tags` list missing."
+    });
+  }
+  if (/^#{1,6}\s+Citations\s*$/m.test(content) && !("sources" in data)) {
+    issues.push({
+      severity: "warning",
+      rule: "\xA713.1",
+      message: 'Legacy `# Citations` section found. OKF v0.2 records provenance in the `sources` frontmatter field \u2014 run "Migrate note to OKF v0.2".',
+      fix: "migrate-citations"
+    });
+  }
+  if (settings.warnTrustFields) {
+    issues.push(...validateTrustFamilies(data));
+  }
+  if (settings.checkAttestedComputation && typeof type === "string" && type.trim() === "Attested Computation") {
+    issues.push(...validateAttestedComputation(data, content));
+  }
+  if (settings.enablePortent) {
+    issues.push(...validatePortent(data, settings));
+  }
+  return issues;
+}
+function validateTrustFamilies(data) {
+  const issues = [];
+  if ("verified" in data && data["verified"] !== null) {
+    const events = normalizeVerified(data);
+    const raw = data["verified"];
+    if (events.length === 0 && raw !== void 0) {
+      issues.push({
+        severity: "warning",
+        rule: "\xA75.2",
+        message: "`verified` should be a `{ by, at }` mapping or a list of them."
+      });
+    }
+    for (const e of events) {
+      if (!hasNonEmpty2(e, "by")) {
+        issues.push({
+          severity: "warning",
+          rule: "\xA75.2",
+          message: "A `verified` entry is missing its `by` actor."
+        });
+      } else if (!ACTOR_RE.test(String(e["by"]).trim())) {
+        issues.push({
+          severity: "warning",
+          rule: "\xA77",
+          message: `\`verified\` actor \`${String(
+            e["by"]
+          )}\` should follow the actor convention (\`<producer>/<version>\`, \`human:<id>\`, \`process:<id>\`).`
+        });
+      }
+      if (e["at"] !== void 0 && !ISO_DATETIME_RE.test(String(e["at"]))) {
+        issues.push({
+          severity: "warning",
+          rule: "\xA75.2",
+          message: "A `verified` entry's `at` is not a parseable ISO 8601 datetime."
+        });
+      }
+    }
+  }
+  if ("status" in data) {
+    const s = data["status"];
+    if (typeof s !== "string" || !OKF_STATUSES.includes(s.trim())) {
+      issues.push({
+        severity: "warning",
+        rule: "\xA75.4",
+        message: `\`status\` should be one of ${OKF_STATUSES.join(" | ")}.`
+      });
+    }
+  }
+  if ("stale_after" in data && data["stale_after"] != null) {
+    const s = String(data["stale_after"]).slice(0, 10);
+    if (!ISO_DATE_RE.test(s)) {
+      issues.push({
+        severity: "warning",
+        rule: "\xA75.5",
+        message: "`stale_after` should be an absolute date (`YYYY-MM-DD`)."
+      });
+    }
+  }
+  if ("sources" in data && data["sources"] != null) {
+    const src = data["sources"];
+    if (!Array.isArray(src)) {
+      issues.push({
+        severity: "warning",
+        rule: "\xA75.1",
+        message: "`sources` should be a YAML list of source entries."
+      });
+    } else {
+      src.forEach((entry, i) => {
+        if (!entry || typeof entry !== "object") {
+          issues.push({
+            severity: "warning",
+            rule: "\xA75.1",
+            message: `\`sources[${i}]\` should be a mapping with at least a \`resource\`.`
+          });
+          return;
+        }
+        const e = entry;
+        if (!hasNonEmpty2(e, "resource")) {
+          issues.push({
+            severity: "warning",
+            rule: "\xA75.1",
+            message: `\`sources[${i}]\` is missing the required \`resource\`.`
+          });
+        }
+        if ("usage_count" in e && typeof e["usage_count"] !== "number") {
+          issues.push({
+            severity: "warning",
+            rule: "\xA75.1",
+            message: `\`sources[${i}].usage_count\` should be a number.`
+          });
+        }
+        if ("last_modified" in e && e["last_modified"] != null && !ISO_DATE_RE.test(String(e["last_modified"]).slice(0, 10))) {
+          issues.push({
+            severity: "warning",
+            rule: "\xA75.1",
+            message: `\`sources[${i}].last_modified\` should be an absolute date (\`YYYY-MM-DD\`).`
+          });
+        }
+      });
+    }
+  }
+  return issues;
+}
+function validateAttestedComputation(data, content) {
+  const issues = [];
+  if (!hasNonEmpty2(data, "runtime")) {
+    issues.push({
+      severity: "error",
+      rule: "\xA710.2",
+      message: "`runtime` is required for an Attested Computation (e.g. `bigquery`, `dbt`, `python`)."
+    });
+  }
+  if ("parameters" in data && data["parameters"] != null) {
+    const params = data["parameters"];
+    if (!Array.isArray(params)) {
+      issues.push({
+        severity: "warning",
+        rule: "\xA710.2",
+        message: "`parameters` should be a list of `{ name, type, required }`."
+      });
+    } else {
+      params.forEach((p, i) => {
+        if (!p || typeof p !== "object" || !hasNonEmpty2(p, "name")) {
+          issues.push({
+            severity: "warning",
+            rule: "\xA710.2",
+            message: `\`parameters[${i}]\` should have at least a \`name\`.`
+          });
+        }
+      });
+    }
+  }
+  const hasComputationHeading = /^#{1,6}\s+Computation\s*$/m.test(content);
+  if (!hasComputationHeading && !hasNonEmpty2(data, "computation")) {
+    issues.push({
+      severity: "warning",
+      rule: "\xA710.3",
+      message: "An Attested Computation needs its computation \u2014 either a body `# Computation` fenced block or a `computation` path."
+    });
+  }
+  if ("executor" in data && data["executor"] != null) {
+    const ex = data["executor"];
+    if (!ex || typeof ex !== "object") {
+      issues.push({
+        severity: "warning",
+        rule: "\xA710.2",
+        message: "`executor` should be a mapping with `resource` and `receipt`."
+      });
+    } else {
+      const e = ex;
+      if (!hasNonEmpty2(e, "resource")) {
+        issues.push({
+          severity: "warning",
+          rule: "\xA710.2",
+          message: "`executor.resource` (run instructions or code) is missing."
+        });
+      }
+      if ("receipt" in e && !Array.isArray(e["receipt"])) {
+        issues.push({
+          severity: "warning",
+          rule: "\xA710.2",
+          message: "`executor.receipt` should be a list of fields a run must return."
+        });
+      }
+    }
+  }
+  if ("attester" in data && data["attester"] != null) {
+    const at = data["attester"];
+    if (!at || typeof at !== "object" || !hasNonEmpty2(at, "resource")) {
+      issues.push({
+        severity: "warning",
+        rule: "\xA710.2",
+        message: "`attester.resource` (deterministic check code) is missing."
+      });
+    }
+  }
+  return issues;
+}
 function validateIndex(content, isRoot, settings) {
   const issues = [];
   if (!settings.checkReservedFiles) return issues;
@@ -283,8 +531,8 @@ function validateIndex(content, isRoot, settings) {
     if (!isRoot) {
       issues.push({
         severity: "error",
-        rule: "\xA76",
-        message: "Non-root `index.md` must not contain frontmatter (\xA76). Only the bundle-root index.md may, and only for `okf_version`."
+        rule: "\xA78",
+        message: "Non-root `index.md` must not contain frontmatter (\xA78). Only the bundle-root index.md may, and only for `okf_version`."
       });
     } else {
       let data = {};
@@ -296,7 +544,7 @@ function validateIndex(content, isRoot, settings) {
       } catch (e) {
         issues.push({
           severity: "error",
-          rule: "\xA711",
+          rule: "\xA712",
           message: "Root `index.md` frontmatter is not parseable YAML."
         });
         return issues;
@@ -306,17 +554,19 @@ function validateIndex(content, isRoot, settings) {
       if (extra.length > 0) {
         issues.push({
           severity: "error",
-          rule: "\xA711",
+          rule: "\xA712",
           message: `Root index.md frontmatter may only contain \`okf_version\`. Unexpected key(s): ${extra.join(
             ", "
           )}.`
         });
       }
-      if ("okf_version" in data && String(data["okf_version"]) !== "0.1") {
+      if ("okf_version" in data && !OKF_KNOWN_VERSIONS.includes(String(data["okf_version"]))) {
         issues.push({
           severity: "warning",
-          rule: "\xA711",
-          message: `Declared okf_version "${data["okf_version"]}" is not "0.1" (this validator targets v0.1).`
+          rule: "\xA712",
+          message: `Declared okf_version "${data["okf_version"]}" is not one of ${OKF_KNOWN_VERSIONS.join(
+            " / "
+          )} (this validator targets v${OKF_VERSION}).`
         });
       }
     }
@@ -327,13 +577,13 @@ function validateIndex(content, isRoot, settings) {
   if (body.trim().length > 0 && !hasLinkBullet) {
     issues.push({
       severity: "warning",
-      rule: "\xA76",
+      rule: "\xA78",
       message: "`index.md` should list directory contents as bulleted markdown links grouped under section headings (progressive disclosure)."
     });
   } else if (hasLinkBullet && !hasHeading) {
     issues.push({
       severity: "warning",
-      rule: "\xA76",
+      rule: "\xA78",
       message: "`index.md` entries should be grouped under at least one section heading."
     });
   }
@@ -346,7 +596,7 @@ function validateLog(content, settings) {
   if (hasFm) {
     issues.push({
       severity: "warning",
-      rule: "\xA77",
+      rule: "\xA79",
       message: "`log.md` is not expected to contain frontmatter."
     });
   }
@@ -359,7 +609,7 @@ function validateLog(content, settings) {
   if (h2s.length === 0) {
     issues.push({
       severity: "warning",
-      rule: "\xA77",
+      rule: "\xA79",
       message: "`log.md` should contain date-grouped entries under `## YYYY-MM-DD` headings."
     });
     return issues;
@@ -369,7 +619,7 @@ function validateLog(content, settings) {
     if (!ISO_DATE_RE.test(h)) {
       issues.push({
         severity: "error",
-        rule: "\xA77",
+        rule: "\xA79",
         message: `Log date heading "## ${h}" must be ISO 8601 \`YYYY-MM-DD\`.`
       });
     } else {
@@ -380,7 +630,7 @@ function validateLog(content, settings) {
     if (dates[i] > dates[i - 1]) {
       issues.push({
         severity: "warning",
-        rule: "\xA77",
+        rule: "\xA79",
         message: `Log entries should be newest-first; "${dates[i]}" appears after "${dates[i - 1]}".`
       });
       break;
@@ -388,36 +638,42 @@ function validateLog(content, settings) {
   }
   return issues;
 }
-function hasNonEmpty(data, key) {
+function hasNonEmpty2(data, key) {
   const v = data[key];
   if (v === void 0 || v === null) return false;
   if (typeof v === "string") return v.trim().length > 0;
   if (Array.isArray(v)) return v.length > 0;
   return true;
 }
-function applyFixes(path, content, issues, settings) {
+function applyFixes(path, content, issues, settings, includeMigrations = false) {
   const applied = [];
-  const fixes = new Set(issues.filter((i) => i.fix).map((i) => i.fix));
+  const MIGRATIONS = ["migrate-timestamp", "migrate-citations"];
+  const fixes = new Set(
+    issues.map((i) => i.fix).filter(
+      (f) => !!f && (includeMigrations || !MIGRATIONS.includes(f))
+    )
+  );
   if (fixes.size === 0) return { content, applied };
   const nowIso = (/* @__PURE__ */ new Date()).toISOString().replace(/\.\d{3}Z$/, "Z");
+  const actor = settings.defaultActor || "okf-enforcer/0.3";
   const title = basename(path);
   const split = splitFrontmatter(content);
   if (!split.hasFm) {
     const lines = [
       `type: ${settings.defaultType}`,
       `title: ${title}`,
-      `timestamp: ${nowIso}`
+      `generated: { by: ${actor}, at: ${nowIso} }`
     ];
     const fm = `---
 ${lines.join("\n")}
 ---
 
 `;
-    applied.push("added frontmatter (type, title, timestamp)");
+    applied.push("added frontmatter (type, title, generated)");
     return { content: fm + content.replace(/^\s+/, ""), applied };
   }
   const fmLines = split.raw.split(/\r?\n/);
-  const body = split.body;
+  let body = split.body;
   const hasKey = (k) => fmLines.some((l) => new RegExp(`^${k}\\s*:`).test(l.trim()));
   if (fixes.has("add-type") && !hasKey("type")) {
     fmLines.unshift(`type: ${settings.defaultType}`);
@@ -427,14 +683,55 @@ ${lines.join("\n")}
     fmLines.push(`title: ${title}`);
     applied.push("added title");
   }
-  if (fixes.has("add-timestamp") && !hasKey("timestamp")) {
-    fmLines.push(`timestamp: ${nowIso}`);
-    applied.push("added timestamp");
+  if (fixes.has("add-generated") && !hasKey("generated")) {
+    fmLines.push(`generated: { by: ${actor}, at: ${nowIso} }`);
+    applied.push("added generated");
+  }
+  if (fixes.has("migrate-timestamp") && hasKey("timestamp") && !hasKey("generated")) {
+    for (let i = 0; i < fmLines.length; i++) {
+      const m = fmLines[i].match(/^(\s*)timestamp\s*:\s*(.+?)\s*$/);
+      if (m) {
+        const at = m[2].replace(/^["']|["']$/g, "");
+        fmLines[i] = `${m[1]}generated: { by: ${actor}, at: ${at} }`;
+        applied.push("migrated timestamp \u2192 generated");
+        break;
+      }
+    }
+  }
+  if (fixes.has("migrate-citations") && !hasKey("sources")) {
+    const migrated = migrateCitations(body);
+    if (migrated) {
+      body = migrated.body;
+      fmLines.push("sources:");
+      for (const r of migrated.resources) fmLines.push(`  - resource: ${r}`);
+      applied.push(`migrated # Citations \u2192 sources (${migrated.resources.length})`);
+    }
   }
   const rebuilt = `---
 ${fmLines.join("\n")}
 ---${body}`;
   return { content: rebuilt, applied };
+}
+function migrateCitations(body) {
+  const lines = body.split(/\r?\n/);
+  const start = lines.findIndex((l) => /^#{1,6}\s+Citations\s*$/.test(l));
+  if (start === -1) return null;
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (/^#{1,6}\s+\S/.test(lines[i])) {
+      end = i;
+      break;
+    }
+  }
+  const resources = [];
+  for (let i = start + 1; i < end; i++) {
+    const m = lines[i].match(/^\s*[-*]\s+(.+?)\s*$/);
+    if (m) resources.push(m[1].replace(/^["']|["']$/g, ""));
+  }
+  if (resources.length === 0) return null;
+  const kept = [...lines.slice(0, start), ...lines.slice(end)];
+  const newBody = kept.join("\n").replace(/\n{3,}/g, "\n\n");
+  return { body: newBody, resources };
 }
 
 // report-view.ts
@@ -691,6 +988,16 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
         return true;
       }
     });
+    this.addCommand({
+      id: "okf-migrate-v01-v02",
+      name: "Migrate note to latest OKF",
+      checkCallback: (checking) => {
+        const f = this.app.workspace.getActiveFile();
+        if (!f || f.extension !== "md" || isReserved(f.path)) return false;
+        if (!checking) void this.migrateActive(f);
+        return true;
+      }
+    });
     const liveCheck = (0, import_obsidian3.debounce)(
       (file) => {
         void this.onFileChanged(file);
@@ -885,7 +1192,7 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
     if (issues.length === 0) {
       this.statusEl.setAttribute(
         "aria-label",
-        "Active note conforms to OKF v0.1 \u2014 click to scan the vault"
+        "Active note conforms to OKF v0.2 \u2014 click to scan the vault"
       );
     } else {
       const lines = issues.slice(0, 8).map((i) => `${i.severity === "error" ? "\u2716" : "\u26A0"} ${i.rule} ${i.message}`);
@@ -902,7 +1209,7 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
     const ok = scanned - errFiles - warnFiles;
     this.statusEl.setAttribute(
       "aria-label",
-      `OKF v0.1 \u2014 ${scanned} notes scanned
+      `OKF v0.2 \u2014 ${scanned} notes scanned
 \u2713 ${ok} conformant
 \u2716 ${errFiles} with errors
 \u26A0 ${warnFiles} warnings only
@@ -976,7 +1283,8 @@ Click to open the report`
       file.path,
       content,
       issues,
-      this.settings
+      this.settings,
+      this.settings.autoMigrateOnFix
     );
     if (applied.length > 0 && fixed !== content) {
       this.selfWrites.add(file.path);
@@ -987,6 +1295,34 @@ Click to open the report`
     }
     if (notify) new import_obsidian3.Notice("OKF: nothing auto-fixable on this note.");
     return 0;
+  }
+  /**
+   * Migrate a note from OKF v0.1 to v0.2 (§13): rename `timestamp` → `generated`
+   * and lift a body `# Citations` list into `sources`. Runs the migration fixes
+   * that ordinary save-time auto-fix deliberately skips.
+   */
+  async migrateActive(file) {
+    const content = await this.app.vault.read(file);
+    const issues = validateContent(
+      file.path,
+      content,
+      this.isRoot(file),
+      this.settings
+    );
+    const { content: fixed, applied } = applyFixes(
+      file.path,
+      content,
+      issues,
+      this.settings,
+      true
+    );
+    if (applied.length > 0 && fixed !== content) {
+      this.selfWrites.add(file.path);
+      await this.app.vault.modify(file, fixed);
+      new import_obsidian3.Notice(`OKF migrated ${file.basename}: ${applied.join(", ")}`);
+    } else {
+      new import_obsidian3.Notice("OKF: nothing to migrate \u2014 note already uses v0.2 fields.");
+    }
   }
   /**
    * Write user-supplied frontmatter values (from the prompt modal) into a note,
@@ -1072,6 +1408,13 @@ Click to open the report`
 `;
     }
     const indexPath = folder.path === "/" || folder.path === "" ? "index.md" : `${folder.path}/index.md`;
+    if (indexPath === "index.md") {
+      out = `---
+okf_version: "${OKF_VERSION}"
+---
+
+${out}`;
+    }
     const existing = this.app.vault.getAbstractFileByPath(indexPath);
     if (existing instanceof import_obsidian3.TFile) {
       const current = await this.app.vault.read(existing);
@@ -1199,6 +1542,16 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
         )
       },
       {
+        name: "Default actor for `generated.by`",
+        desc: "Actor written when auto-fix adds a `generated` block (\xA77). Use `<producer>/<version>` (e.g. `okf-enforcer/0.3`) or `human:<id>`.",
+        control: (row) => row.addText(
+          (t) => t.setValue(s.defaultActor).onChange((v) => {
+            s.defaultActor = v.trim() || "okf-enforcer/0.3";
+            save();
+          })
+        )
+      },
+      {
         name: "Live check on save / open",
         desc: "Validate the active note as you edit and when you open it.",
         control: (row) => row.addToggle(
@@ -1221,7 +1574,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       },
       {
         name: "Fix format issues on save",
-        desc: "When you edit a note, auto-insert missing OKF frontmatter (type/title/timestamp). Non-destructive; never overwrites existing values.",
+        desc: "When you edit a note, auto-insert missing OKF frontmatter (type/title/generated). Non-destructive; never overwrites existing values.",
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.fixOnSave).onChange((v) => {
             s.fixOnSave = v;
@@ -1231,10 +1584,20 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       },
       {
         name: "Auto-generate index.md",
-        desc: "Regenerate a folder's index.md (\xA76 listing) automatically when its notes change.",
+        desc: "Regenerate a folder's index.md (\xA78 listing) automatically when its notes change.",
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.autoGenerateIndex).onChange((v) => {
             s.autoGenerateIndex = v;
+            save();
+          })
+        )
+      },
+      {
+        name: "Auto-migrate to latest OKF on fix",
+        desc: 'Let auto-fix (and fix-on-save) also upgrade notes to the latest OKF version \u2014 e.g. rewrite legacy `timestamp` \u2192 `generated` and lift `# Citations` \u2192 `sources`. On by default. Turn off to keep migrations manual via the "Migrate note to latest OKF" command, since they rewrite existing content.',
+        control: (row) => row.addToggle(
+          (tg) => tg.setValue(s.autoMigrateOnFix).onChange((v) => {
+            s.autoMigrateOnFix = v;
             save();
           })
         )
@@ -1253,10 +1616,30 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       { name: "Rules", heading: true },
       {
         name: "Warn on missing recommended fields",
-        desc: "title, description, timestamp (\xA74.1).",
+        desc: "title, description, generated (\xA74.1, \xA75.2).",
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.warnRecommendedFields).onChange((v) => {
             s.warnRecommendedFields = v;
+            save();
+          })
+        )
+      },
+      {
+        name: "Validate trust & lifecycle fields",
+        desc: "When present, check the v0.2 families: `verified` shape + actors, `status` vocabulary, `stale_after` date, and `sources` (\xA75). Advisory \u2014 off by default.",
+        control: (row) => row.addToggle(
+          (tg) => tg.setValue(s.warnTrustFields).onChange((v) => {
+            s.warnTrustFields = v;
+            save();
+          })
+        )
+      },
+      {
+        name: "Validate Attested Computation concepts",
+        desc: "Check `type: Attested Computation` notes (\xA710): required `runtime`, a present computation, and `parameters`/`executor`/`attester` shape.",
+        control: (row) => row.addToggle(
+          (tg) => tg.setValue(s.checkAttestedComputation).onChange((v) => {
+            s.checkAttestedComputation = v;
             save();
           })
         )
