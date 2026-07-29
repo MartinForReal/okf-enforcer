@@ -32,6 +32,16 @@ import {
 import { PORTENT_TYPES, PORTENT_STATUSES } from "./portent";
 import { OkfReportView, OKF_VIEW_TYPE, FileResult } from "./report-view";
 
+/**
+ * How far a folder sits from the vault root, which is 0. Indexes are written
+ * deepest first: a parent links at — and quotes the description section of —
+ * its children's `index.md`, so those have to be on disk before the listing
+ * above them is built.
+ */
+function folderDepth(path: string): number {
+  return path === "/" || path === "" ? 0 : path.split("/").length;
+}
+
 export default class OkfPlugin extends Plugin {
   settings: OkfSettings;
   statusEl: HTMLElement;
@@ -284,7 +294,7 @@ export default class OkfPlugin extends Plugin {
     if (this.settings.fixOnSave && !isReserved(file.path)) {
       const n = await this.fixFile(file, false);
       if (n > 0 && file.parent) {
-        this.dirtyIndexFolders.add(file.parent.path);
+        this.markIndexDirty(file.parent.path);
       }
     }
 
@@ -300,20 +310,39 @@ export default class OkfPlugin extends Plugin {
     }
   }
 
-  /** Queues a folder's index.md for the next debounced regeneration. */
+  /**
+   * Queues a folder's index.md for the next debounced regeneration, along with
+   * every folder above it. A listing describes its subdirectories as well as its
+   * notes, and both halves of a subdirectory entry look past the folder itself:
+   * whether one is worth listing depends on what it holds at any depth, and its
+   * description is read out of its own index.md. So a note appearing or
+   * vanishing deep in a tree can change every listing above it, not just the one
+   * in the folder the note sat in.
+   */
   private markIndexDirty(path: string): void {
     if (!this.settings.autoGenerateIndex) return;
-    this.dirtyIndexFolders.add(path);
+    for (let p = path; ; p = parentPath(p)) {
+      this.dirtyIndexFolders.add(p);
+      if (p === "/" || p === "") break;
+    }
     this.flushIndexes();
   }
 
   private flushIndexes = debounce(
     async () => {
       if (!this.settings.autoGenerateIndex) return;
-      const folders = [...this.dirtyIndexFolders];
+      const folders = [...this.dirtyIndexFolders].sort(
+        (a, b) => folderDepth(b) - folderDepth(a)
+      );
       this.dirtyIndexFolders.clear();
       for (const path of folders) {
-        const folder = this.app.vault.getAbstractFileByPath(path);
+        // The root is asked for by name rather than looked up: every walk up the
+        // tree ends there, so it is regenerated far too often to rest on whether
+        // "/" happens to be a key in the vault's path map.
+        const folder =
+          path === "/" || path === ""
+            ? this.app.vault.getRoot()
+            : this.app.vault.getAbstractFileByPath(path);
         if (folder instanceof TFolder) {
           await this.generateIndexForFolder(folder, false);
         }
@@ -756,14 +785,18 @@ export default class OkfPlugin extends Plugin {
     try {
       const folders = new Set<TFolder>();
       for (const f of this.candidateFiles()) {
-        if (f.parent) folders.add(f.parent);
+        // Every folder above the note, not just the one holding it. A folder
+        // that contains nothing but subfolders still gets listed by its parent
+        // — listability looks all the way down — so it needs an index.md of its
+        // own, or that entry points at a file nothing would ever write.
+        for (let p = f.parent; p; p = p.parent) folders.add(p);
       }
       // Deepest folders first: a parent links to — and quotes the description
       // section of — its children's index.md, so those must be in place before
       // the parent listing is written.
-      const depth = (f: TFolder) =>
-        f.path === "/" || f.path === "" ? 0 : f.path.split("/").length;
-      const list = [...folders].sort((a, b) => depth(b) - depth(a));
+      const list = [...folders].sort(
+        (a, b) => folderDepth(b.path) - folderDepth(a.path)
+      );
       let written = 0;
       await this.processQueue(
         list,
@@ -947,7 +980,7 @@ class OkfSettingTab extends PluginSettingTab {
       },
       {
         name: "Auto-generate index.md",
-        desc: "Keep a folder's index.md (§8 listing) up to date as its notes are added, renamed, and deleted. A folder with something to list gets an index generated; an existing one has missing entries added, wrong links corrected, and entries for deleted notes removed, or is rebuilt if \"Rebuild existing index.md\" is on.",
+        desc: "Keep a folder's index.md (§8 listing) up to date as its notes are added, renamed, and deleted, along with every listing above it — a parent describes its subdirectories by what they hold. A folder with something to list gets an index generated; an existing one has missing entries added, wrong links corrected, and entries for deleted notes removed, or is rebuilt if \"Rebuild existing index.md\" is on.",
         control: (row) =>
           row.addToggle((tg) =>
             tg.setValue(s.autoGenerateIndex).onChange((v) => {

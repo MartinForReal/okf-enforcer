@@ -1100,6 +1100,9 @@ var OkfReportView = class extends import_obsidian2.ItemView {
 };
 
 // main.ts
+function folderDepth(path) {
+  return path === "/" || path === "" ? 0 : path.split("/").length;
+}
 var OkfPlugin = class extends import_obsidian3.Plugin {
   constructor() {
     super(...arguments);
@@ -1112,10 +1115,12 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
     this.flushIndexes = (0, import_obsidian3.debounce)(
       async () => {
         if (!this.settings.autoGenerateIndex) return;
-        const folders = [...this.dirtyIndexFolders];
+        const folders = [...this.dirtyIndexFolders].sort(
+          (a, b) => folderDepth(b) - folderDepth(a)
+        );
         this.dirtyIndexFolders.clear();
         for (const path of folders) {
-          const folder = this.app.vault.getAbstractFileByPath(path);
+          const folder = path === "/" || path === "" ? this.app.vault.getRoot() : this.app.vault.getAbstractFileByPath(path);
           if (folder instanceof import_obsidian3.TFolder) {
             await this.generateIndexForFolder(folder, false);
           }
@@ -1328,7 +1333,7 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
     if (this.settings.fixOnSave && !isReserved(file.path)) {
       const n = await this.fixFile(file, false);
       if (n > 0 && file.parent) {
-        this.dirtyIndexFolders.add(file.parent.path);
+        this.markIndexDirty(file.parent.path);
       }
     }
     if (this.settings.liveCheckOnSave) {
@@ -1341,10 +1346,21 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
       this.markIndexDirty(file.parent.path);
     }
   }
-  /** Queues a folder's index.md for the next debounced regeneration. */
+  /**
+   * Queues a folder's index.md for the next debounced regeneration, along with
+   * every folder above it. A listing describes its subdirectories as well as its
+   * notes, and both halves of a subdirectory entry look past the folder itself:
+   * whether one is worth listing depends on what it holds at any depth, and its
+   * description is read out of its own index.md. So a note appearing or
+   * vanishing deep in a tree can change every listing above it, not just the one
+   * in the folder the note sat in.
+   */
   markIndexDirty(path) {
     if (!this.settings.autoGenerateIndex) return;
-    this.dirtyIndexFolders.add(path);
+    for (let p = path; ; p = parentPath(p)) {
+      this.dirtyIndexFolders.add(p);
+      if (p === "/" || p === "") break;
+    }
     this.flushIndexes();
   }
   /**
@@ -1722,10 +1738,11 @@ ${out}`;
     try {
       const folders = /* @__PURE__ */ new Set();
       for (const f of this.candidateFiles()) {
-        if (f.parent) folders.add(f.parent);
+        for (let p = f.parent; p; p = p.parent) folders.add(p);
       }
-      const depth = (f) => f.path === "/" || f.path === "" ? 0 : f.path.split("/").length;
-      const list = [...folders].sort((a, b) => depth(b) - depth(a));
+      const list = [...folders].sort(
+        (a, b) => folderDepth(b.path) - folderDepth(a.path)
+      );
       let written = 0;
       await this.processQueue(
         list,
@@ -1876,7 +1893,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       },
       {
         name: "Auto-generate index.md",
-        desc: `Keep a folder's index.md (\xA78 listing) up to date as its notes are added, renamed, and deleted. A folder with something to list gets an index generated; an existing one has missing entries added, wrong links corrected, and entries for deleted notes removed, or is rebuilt if "Rebuild existing index.md" is on.`,
+        desc: `Keep a folder's index.md (\xA78 listing) up to date as its notes are added, renamed, and deleted, along with every listing above it \u2014 a parent describes its subdirectories by what they hold. A folder with something to list gets an index generated; an existing one has missing entries added, wrong links corrected, and entries for deleted notes removed, or is rebuilt if "Rebuild existing index.md" is on.`,
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.autoGenerateIndex).onChange((v) => {
             s.autoGenerateIndex = v;
