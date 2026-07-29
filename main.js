@@ -163,7 +163,7 @@ var ACTOR_RE = /^(human:.+|process:.+|[^/\s]+\/[^/\s]+)$/;
 var ISO_DATETIME_RE = /^\d{4}-\d{2}-\d{2}T/;
 var DEFAULT_SETTINGS = {
   defaultType: "Concept",
-  defaultActor: "okf-enforcer/0.3",
+  defaultActor: "okf-enforcer/0.4",
   warnRecommendedFields: true,
   warnTrustFields: false,
   checkAttestedComputation: true,
@@ -693,7 +693,7 @@ function applyFixes(path, content, issues, settings, includeMigrations = false) 
   );
   if (fixes.size === 0) return { content, applied };
   const nowIso = (/* @__PURE__ */ new Date()).toISOString().replace(/\.\d{3}Z$/, "Z");
-  const actor = settings.defaultActor || "okf-enforcer/0.3";
+  const actor = settings.defaultActor || "okf-enforcer/0.4";
   const title = basename(path);
   const split = splitFrontmatter(content);
   if (!split.hasFm) {
@@ -943,7 +943,7 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
         for (const path of folders) {
           const folder = this.app.vault.getAbstractFileByPath(path);
           if (folder instanceof import_obsidian3.TFolder) {
-            await this.generateIndexForFolder(folder, false);
+            await this.generateIndexForFolder(folder, false, false);
           }
         }
       },
@@ -1410,7 +1410,7 @@ Click to open the report`
     await this.scanVault();
   }
   /** Writes the folder's index.md; returns whether the file changed on disk. */
-  async generateIndexForFolder(folder, notify = true) {
+  async generateIndexForFolder(folder, notify = true, createMissing = true) {
     var _a, _b;
     if (!folder) {
       if (notify) new import_obsidian3.Notice("OKF: no folder for the active note.");
@@ -1418,6 +1418,7 @@ Click to open the report`
     }
     const indexPath = folder.path === "/" || folder.path === "" ? "index.md" : `${folder.path}/index.md`;
     const existing = this.app.vault.getAbstractFileByPath(indexPath);
+    if (!(existing instanceof import_obsidian3.TFile) && !createMissing) return false;
     if (existing instanceof import_obsidian3.TFile && !this.settings.overwriteExistingIndex) {
       if (notify) {
         new import_obsidian3.Notice(
@@ -1621,10 +1622,10 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       },
       {
         name: "Default actor for `generated.by`",
-        desc: "Actor written when auto-fix adds a `generated` block (\xA77). Use `<producer>/<version>` (e.g. `okf-enforcer/0.3`) or `human:<id>`.",
+        desc: "Actor written when auto-fix adds a `generated` block (\xA77). Use `<producer>/<version>` (e.g. `okf-enforcer/0.4`) or `human:<id>`.",
         control: (row) => row.addText(
           (t) => t.setValue(s.defaultActor).onChange((v) => {
-            s.defaultActor = v.trim() || "okf-enforcer/0.3";
+            s.defaultActor = v.trim() || "okf-enforcer/0.4";
             save();
           })
         )
@@ -1662,7 +1663,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       },
       {
         name: "Auto-generate index.md",
-        desc: "Regenerate a folder's index.md (\xA78 listing) automatically when its notes change.",
+        desc: "Refresh a folder's index.md (\xA78 listing) automatically when its notes change. Only folders that already have an index.md are refreshed \u2014 \xA78 makes index files optional, so this never creates one. Use the generate commands to add an index to a folder.",
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.autoGenerateIndex).onChange((v) => {
             s.autoGenerateIndex = v;

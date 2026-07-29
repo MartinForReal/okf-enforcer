@@ -286,7 +286,7 @@ export default class OkfPlugin extends Plugin {
       for (const path of folders) {
         const folder = this.app.vault.getAbstractFileByPath(path);
         if (folder instanceof TFolder) {
-          await this.generateIndexForFolder(folder, false);
+          await this.generateIndexForFolder(folder, false, false);
         }
       }
     },
@@ -572,7 +572,11 @@ export default class OkfPlugin extends Plugin {
   }
 
   /** Writes the folder's index.md; returns whether the file changed on disk. */
-  async generateIndexForFolder(folder: TFolder, notify = true): Promise<boolean> {
+  async generateIndexForFolder(
+    folder: TFolder,
+    notify = true,
+    createMissing = true
+  ): Promise<boolean> {
     if (!folder) {
       if (notify) new Notice("OKF: no folder for the active note.");
       return false;
@@ -582,6 +586,11 @@ export default class OkfPlugin extends Plugin {
         ? "index.md"
         : `${folder.path}/index.md`;
     const existing = this.app.vault.getAbstractFileByPath(indexPath);
+    // §8 makes index.md optional and §11 forbids rejecting a bundle for a
+    // missing one, so nothing here is owed an index. The automatic path passes
+    // createMissing: false and only refreshes folders that already keep one;
+    // creating a new index is left to the explicit commands.
+    if (!(existing instanceof TFile) && !createMissing) return false;
     // Non-destructive mode: an index that already exists — along with whatever
     // was hand-written into it — is left alone; only missing ones are created.
     if (existing instanceof TFile && !this.settings.overwriteExistingIndex) {
@@ -835,11 +844,11 @@ class OkfSettingTab extends PluginSettingTab {
       },
       {
         name: "Default actor for `generated.by`",
-        desc: "Actor written when auto-fix adds a `generated` block (§7). Use `<producer>/<version>` (e.g. `okf-enforcer/0.3`) or `human:<id>`.",
+        desc: "Actor written when auto-fix adds a `generated` block (§7). Use `<producer>/<version>` (e.g. `okf-enforcer/0.4`) or `human:<id>`.",
         control: (row) =>
           row.addText((t) =>
             t.setValue(s.defaultActor).onChange((v) => {
-              s.defaultActor = v.trim() || "okf-enforcer/0.3";
+              s.defaultActor = v.trim() || "okf-enforcer/0.4";
               save();
             })
           ),
@@ -880,7 +889,7 @@ class OkfSettingTab extends PluginSettingTab {
       },
       {
         name: "Auto-generate index.md",
-        desc: "Regenerate a folder's index.md (§8 listing) automatically when its notes change.",
+        desc: "Refresh a folder's index.md (§8 listing) automatically when its notes change. Only folders that already have an index.md are refreshed — §8 makes index files optional, so this never creates one. Use the generate commands to add an index to a folder.",
         control: (row) =>
           row.addToggle((tg) =>
             tg.setValue(s.autoGenerateIndex).onChange((v) => {

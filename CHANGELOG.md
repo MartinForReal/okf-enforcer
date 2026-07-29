@@ -4,24 +4,37 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.0] - 2026-07-29
+
+Index generation follows [#8](https://github.com/MartinForReal/okf-enforcer/issues/8):
+listings describe what they link to, and generation no longer destroys what you
+wrote. §8 makes `index.md` optional and §11 forbids failing a bundle for a
+missing one, so an index is validated when present and created only on request.
 
 ### Added
+- **Entry descriptions** — a concept's entry in a generated `index.md` now
+  carries its frontmatter `description`, which §8 recommends ("Entries SHOULD
+  include the description from the linked concept's frontmatter"). (#8)
 - **Non-destructive index generation** — new **Overwrite existing index.md**
   setting (on by default, matching previous behavior). Turn it off and index
   generation becomes additive: a folder missing `index.md` still gets one, but an
-  existing index — and any prose hand-written into it — is left untouched.
+  existing index — and any prose hand-written into it — is left untouched. (#8)
 - **Subdirectory descriptions** — new **Subdirectory description section**
   setting names a heading in a subfolder's `index.md` (e.g. `Purpose`) whose
   first paragraph becomes that folder's description in the parent listing. Blank
   by default. Non-root indexes carry no frontmatter (§8), so a body section is
   the only place a folder can describe itself. That section is preserved when
-  the index is regenerated, so it survives a refresh even with overwrite on.
+  the index is regenerated, so it survives a refresh even with overwrite on. (#8)
 
 ### Changed
+- **Auto-generation never creates an index.** With **Auto-generate index.md** on,
+  editing a note refreshes its folder's listing only if that folder already keeps
+  an `index.md`. Index files are optional (§8) and a missing one can't fail a
+  bundle (§11), so the plugin no longer materializes one in every folder you
+  touch; the generate commands still create them on request.
 - Subdirectory entries in a generated `index.md` now link to the folder's
   `index.md` when it has one, instead of a bare `folder/` path — clicking that
-  path in Obsidian's default settings created a new, empty note.
+  path in Obsidian's default settings created a new, empty note. (#8)
 - "Generate/refresh index.md for ALL folders" now processes deepest folders
   first, so each parent listing sees its children's freshly written indexes.
 - Descriptions in generated listings are collapsed to a single line and clipped
@@ -30,6 +43,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - "Generate/refresh index.md for ALL folders" reports how many indexes actually
   changed (`updated index.md in X of Y folder(s)`) rather than how many folders
   it visited.
+- The default `generated.by` actor is now `okf-enforcer/0.4`. Existing vaults keep
+  the actor already saved in their settings.
+
+### Fixed
+- The community-store entry description said "OKF v0.1"; the plugin has targeted
+  v0.2 since 0.3.0.
 
 ## [0.3.0] - 2026-07-27
 
@@ -193,6 +212,7 @@ Initial release.
 - Batched, non-blocking scan/fix queue with an inline progress bar for large vaults.
 - Settings for automation toggles, batch size, warning rules, and excluded folders.
 
+[0.4.0]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.4.0
 [0.3.0]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.3.0
 [0.1.3]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.1.3
 [0.1.2]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.1.2

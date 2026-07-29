@@ -55,7 +55,7 @@ export interface OkfSettings extends PortentSettings {
   defaultType: string;
   /**
    * Actor written to `generated.by` when auto-fix creates a `generated` block
-   * (§5.2, §7). Follows the actor convention — e.g. `okf-enforcer/0.3` for the
+   * (§5.2, §7). Follows the actor convention — e.g. `okf-enforcer/0.4` for the
    * plugin, or `human:<id>` if a person wants edits attributed to them.
    */
   defaultActor: string;
@@ -105,7 +105,7 @@ export interface OkfSettings extends PortentSettings {
 
 export const DEFAULT_SETTINGS: OkfSettings = {
   defaultType: "Concept",
-  defaultActor: "okf-enforcer/0.3",
+  defaultActor: "okf-enforcer/0.4",
   warnRecommendedFields: true,
   warnTrustFields: false,
   checkAttestedComputation: true,
@@ -824,7 +824,7 @@ export function applyFixes(
   if (fixes.size === 0) return { content, applied };
 
   const nowIso = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
-  const actor = settings.defaultActor || "okf-enforcer/0.3";
+  const actor = settings.defaultActor || "okf-enforcer/0.4";
   const title = basename(path);
   const split = splitFrontmatter(content);
 
