@@ -19,6 +19,9 @@ import {
   isReserved,
   isExcluded,
   basename,
+  oneLine,
+  sectionBlock,
+  sectionSummary,
   OkfIssue,
   OKF_VERSION,
 } from "./validator";
@@ -568,14 +571,41 @@ export default class OkfPlugin extends Plugin {
     await this.scanVault();
   }
 
-  async generateIndexForFolder(folder: TFolder, notify = true) {
+  /** Writes the folder's index.md; returns whether the file changed on disk. */
+  async generateIndexForFolder(folder: TFolder, notify = true): Promise<boolean> {
     if (!folder) {
       if (notify) new Notice("OKF: no folder for the active note.");
-      return;
+      return false;
     }
+    const indexPath =
+      folder.path === "/" || folder.path === ""
+        ? "index.md"
+        : `${folder.path}/index.md`;
+    const existing = this.app.vault.getAbstractFileByPath(indexPath);
+    // Non-destructive mode: an index that already exists — along with whatever
+    // was hand-written into it — is left alone; only missing ones are created.
+    if (existing instanceof TFile && !this.settings.overwriteExistingIndex) {
+      if (notify) {
+        new Notice(
+          `OKF: kept existing ${indexPath} ("Overwrite existing index.md" is off).`
+        );
+      }
+      return false;
+    }
+
+    // A folder describes itself to its parent through a section of its own
+    // index.md, so a rewrite has to carry that section over — otherwise the
+    // refresh that reads the description is the same one that deletes it.
+    const current =
+      existing instanceof TFile ? await this.app.vault.read(existing) : null;
+    const kept =
+      current === null
+        ? ""
+        : sectionBlock(current, this.settings.indexSubdirDescSection);
+
     const children = folder.children;
     const concepts: { link: string; title: string; desc: string }[] = [];
-    const subdirs: { link: string; name: string }[] = [];
+    const subdirs: { link: string; name: string; desc: string }[] = [];
 
     for (const child of children) {
       if (child instanceof TFile) {
@@ -589,17 +619,30 @@ export default class OkfPlugin extends Plugin {
           typeof fmTitle === "string" && fmTitle.length > 0
             ? fmTitle
             : basename(child.path);
-        const desc = typeof fmDesc === "string" ? fmDesc : "";
+        const desc = typeof fmDesc === "string" ? oneLine(fmDesc) : "";
         concepts.push({ link: encodeURI(child.name), title, desc });
       } else if (child instanceof TFolder) {
-        subdirs.push({ link: encodeURI(child.name) + "/", name: child.name });
+        // Link at the subfolder's index.md when it has one: a bare `folder/`
+        // link resolves to a note that doesn't exist, so clicking it creates a
+        // stray file in the vault.
+        const childIndex = this.app.vault.getAbstractFileByPath(
+          `${child.path}/index.md`
+        );
+        const hasIndex = childIndex instanceof TFile;
+        subdirs.push({
+          link: encodeURI(child.name) + (hasIndex ? "/index.md" : "/"),
+          name: child.name,
+          desc: hasIndex ? await this.folderDescription(childIndex) : "",
+        });
       }
     }
 
-    let out = "";
+    let out = kept ? `${kept}\n\n` : "";
     if (subdirs.length) {
       out += "# Subdirectories\n\n";
-      for (const s of subdirs) out += `* [${s.name}](${s.link}) - \n`;
+      for (const s of subdirs) {
+        out += `* [${s.name}](${s.link})${s.desc ? " - " + s.desc : ""}\n`;
+      }
       out += "\n";
     }
     out += "# Concepts\n\n";
@@ -608,19 +651,13 @@ export default class OkfPlugin extends Plugin {
       out += `* [${c.title}](${c.link})${c.desc ? " - " + c.desc : ""}\n`;
     }
 
-    const indexPath =
-      folder.path === "/" || folder.path === ""
-        ? "index.md"
-        : `${folder.path}/index.md`;
     // The bundle-root index.md is the only place `okf_version` frontmatter is
     // allowed (§8, §12); non-root indexes stay frontmatter-free.
     if (indexPath === "index.md") {
       out = `---\nokf_version: "${OKF_VERSION}"\n---\n\n${out}`;
     }
-    const existing = this.app.vault.getAbstractFileByPath(indexPath);
     if (existing instanceof TFile) {
-      const current = await this.app.vault.read(existing);
-      if (current === out) return;
+      if (current === out) return false;
       this.selfWrites.add(indexPath);
       await this.app.vault.modify(existing, out);
     } else {
@@ -628,6 +665,19 @@ export default class OkfPlugin extends Plugin {
       await this.app.vault.create(indexPath, out);
     }
     if (notify) new Notice(`OKF: wrote ${indexPath}`);
+    return true;
+  }
+
+  /**
+   * Description for a subdirectory entry, read from the configured section of
+   * that folder's index.md (e.g. `# Purpose`). Non-root indexes carry no
+   * frontmatter (§8), so a body section is the only place a folder can say what
+   * it is for.
+   */
+  private async folderDescription(index: TFile): Promise<string> {
+    const section = this.settings.indexSubdirDescSection.trim();
+    if (!section) return "";
+    return sectionSummary(await this.app.vault.cachedRead(index), section);
   }
 
   async generateAllIndexes() {
@@ -641,13 +691,23 @@ export default class OkfPlugin extends Plugin {
       for (const f of this.candidateFiles()) {
         if (f.parent) folders.add(f.parent);
       }
-      const list = [...folders];
+      // Deepest folders first: a parent links to — and quotes the description
+      // section of — its children's index.md, so those must be in place before
+      // the parent listing is written.
+      const depth = (f: TFolder) =>
+        f.path === "/" || f.path === "" ? 0 : f.path.split("/").length;
+      const list = [...folders].sort((a, b) => depth(b) - depth(a));
+      let written = 0;
       await this.processQueue(
         list,
-        (folder) => this.generateIndexForFolder(folder, false),
+        async (folder) => {
+          if (await this.generateIndexForFolder(folder, false)) written++;
+        },
         "OKF: building indexes"
       );
-      new Notice(`OKF: refreshed index.md in ${list.length} folder(s).`);
+      new Notice(
+        `OKF: updated index.md in ${written} of ${list.length} folder(s).`
+      );
     } finally {
       this.busy = false;
     }
@@ -827,6 +887,31 @@ class OkfSettingTab extends PluginSettingTab {
               s.autoGenerateIndex = v;
               save();
             })
+          ),
+      },
+      {
+        name: "Overwrite existing index.md",
+        desc: "On: generating an index rewrites the folder's existing index.md from its contents. Off: an existing index.md — and anything you wrote into it — is left untouched, and only missing ones are created.",
+        control: (row) =>
+          row.addToggle((tg) =>
+            tg.setValue(s.overwriteExistingIndex).onChange((v) => {
+              s.overwriteExistingIndex = v;
+              save();
+            })
+          ),
+      },
+      {
+        name: "Subdirectory description section",
+        desc: "Heading in a subfolder's index.md whose first paragraph becomes that folder's description in the parent listing (e.g. `Purpose`). The section is preserved when that index is regenerated, so what you write there survives a refresh. Leave blank for no subdirectory descriptions. Subdirectory links always point at the folder's index.md when it has one.",
+        control: (row) =>
+          row.addText((t) =>
+            t
+              .setPlaceholder("Purpose")
+              .setValue(s.indexSubdirDescSection)
+              .onChange((v) => {
+                s.indexSubdirDescSection = v.trim();
+                save();
+              })
           ),
       },
       {

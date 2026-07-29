@@ -79,6 +79,20 @@ export interface OkfSettings extends PortentSettings {
   fixOnSave: boolean;
   autoGenerateIndex: boolean;
   /**
+   * Overwrite an existing `index.md` when generating (§8). On by default —
+   * generate/refresh rewrites the listing from the folder's contents. Turn it
+   * off to make generation additive: a missing `index.md` is still created, but
+   * an existing one — and any prose written into it — is never touched.
+   */
+  overwriteExistingIndex: boolean;
+  /**
+   * Heading in a subfolder's `index.md` whose first paragraph describes that
+   * folder (e.g. `Purpose`), used as the description of its entry in the parent
+   * listing. Non-root indexes carry no frontmatter (§8), so a body section is
+   * the only place a folder can say what it holds. Blank turns the lookup off.
+   */
+  indexSubdirDescSection: string;
+  /**
    * Let ordinary auto-fix (including fix-on-save) also apply the v0.1→v0.2
    * migrations — rename `timestamp`→`generated`, lift `# Citations`→`sources`.
    * On by default. Turn off to keep migrations manual (only via the explicit
@@ -102,6 +116,8 @@ export const DEFAULT_SETTINGS: OkfSettings = {
   scanOnStartup: true,
   fixOnSave: true,
   autoGenerateIndex: true,
+  overwriteExistingIndex: true,
+  indexSubdirDescSection: "",
   autoMigrateOnFix: true,
   batchSize: 50,
   excludeFolders: ["Templates"],
@@ -182,6 +198,63 @@ export function splitFrontmatter(
   const m = content.match(FM_RE);
   if (!m) return { hasFm: false, raw: "", body: content };
   return { hasFm: true, raw: m[1], body: content.slice(m[0].length) };
+}
+
+/**
+ * One-line summary: collapse whitespace and clip, so a multi-line
+ * `description` or section paragraph still fits on a single index.md bullet.
+ */
+export function oneLine(text: string, max = 200): string {
+  const s = text.replace(/\s+/g, " ").trim();
+  return s.length > max ? s.slice(0, max - 1).trimEnd() + "…" : s;
+}
+
+/** Line index of the `# <section>` heading in `lines`, or -1. */
+function headingIndex(lines: string[], section: string): number {
+  const wanted = section.trim().toLowerCase();
+  if (!wanted) return -1;
+  return lines.findIndex((l) => {
+    const m = l.match(/^#{1,6}\s+(.+?)\s*#*\s*$/);
+    return !!m && m[1].trim().toLowerCase() === wanted;
+  });
+}
+
+/**
+ * First paragraph under the `# <section>` heading of `content`, as a one-line
+ * summary — how a folder describes itself to its parent's index.md (§8).
+ * Returns "" when the section is missing or empty.
+ */
+export function sectionSummary(content: string, section: string): string {
+  const lines = splitFrontmatter(content).body.split(/\r?\n/);
+  let i = headingIndex(lines, section);
+  if (i < 0) return "";
+
+  const para: string[] = [];
+  for (i++; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^#{1,6}\s+\S/.test(line)) break; // next section
+    if (!line.trim()) {
+      if (para.length) break; // blank line ends the paragraph
+      continue; // …but leading blanks are just spacing
+    }
+    // Strip list/quote markers so a bulleted purpose reads as a sentence.
+    para.push(line.trim().replace(/^([*\-+]|>|\d+\.)\s+/, ""));
+  }
+  return oneLine(para.join(" "));
+}
+
+/**
+ * The whole `# <section>` block of `content` — the heading line plus everything
+ * up to the next heading — so prose a folder wrote about itself survives a
+ * regenerated listing. Returns "" when the section is absent.
+ */
+export function sectionBlock(content: string, section: string): string {
+  const lines = splitFrontmatter(content).body.split(/\r?\n/);
+  const start = headingIndex(lines, section);
+  if (start < 0) return "";
+  let end = start + 1;
+  while (end < lines.length && !/^#{1,6}\s+\S/.test(lines[end])) end++;
+  return lines.slice(start, end).join("\n").trim();
 }
 
 export function validateContent(

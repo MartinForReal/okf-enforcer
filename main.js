@@ -174,6 +174,8 @@ var DEFAULT_SETTINGS = {
   scanOnStartup: true,
   fixOnSave: true,
   autoGenerateIndex: true,
+  overwriteExistingIndex: true,
+  indexSubdirDescSection: "",
   autoMigrateOnFix: true,
   batchSize: 50,
   excludeFolders: ["Templates"],
@@ -207,6 +209,42 @@ function splitFrontmatter(content) {
   const m = content.match(FM_RE);
   if (!m) return { hasFm: false, raw: "", body: content };
   return { hasFm: true, raw: m[1], body: content.slice(m[0].length) };
+}
+function oneLine(text, max = 200) {
+  const s = text.replace(/\s+/g, " ").trim();
+  return s.length > max ? s.slice(0, max - 1).trimEnd() + "\u2026" : s;
+}
+function headingIndex(lines, section) {
+  const wanted = section.trim().toLowerCase();
+  if (!wanted) return -1;
+  return lines.findIndex((l) => {
+    const m = l.match(/^#{1,6}\s+(.+?)\s*#*\s*$/);
+    return !!m && m[1].trim().toLowerCase() === wanted;
+  });
+}
+function sectionSummary(content, section) {
+  const lines = splitFrontmatter(content).body.split(/\r?\n/);
+  let i = headingIndex(lines, section);
+  if (i < 0) return "";
+  const para = [];
+  for (i++; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^#{1,6}\s+\S/.test(line)) break;
+    if (!line.trim()) {
+      if (para.length) break;
+      continue;
+    }
+    para.push(line.trim().replace(/^([*\-+]|>|\d+\.)\s+/, ""));
+  }
+  return oneLine(para.join(" "));
+}
+function sectionBlock(content, section) {
+  const lines = splitFrontmatter(content).body.split(/\r?\n/);
+  const start = headingIndex(lines, section);
+  if (start < 0) return "";
+  let end = start + 1;
+  while (end < lines.length && !/^#{1,6}\s+\S/.test(lines[end])) end++;
+  return lines.slice(start, end).join("\n").trim();
 }
 function validateContent(path, content, isRoot, settings) {
   const reserved = isReserved(path);
@@ -1371,12 +1409,25 @@ Click to open the report`
     new import_obsidian3.Notice(`OKF: auto-fixed ${changed} note(s).`);
     await this.scanVault();
   }
+  /** Writes the folder's index.md; returns whether the file changed on disk. */
   async generateIndexForFolder(folder, notify = true) {
     var _a, _b;
     if (!folder) {
       if (notify) new import_obsidian3.Notice("OKF: no folder for the active note.");
-      return;
+      return false;
     }
+    const indexPath = folder.path === "/" || folder.path === "" ? "index.md" : `${folder.path}/index.md`;
+    const existing = this.app.vault.getAbstractFileByPath(indexPath);
+    if (existing instanceof import_obsidian3.TFile && !this.settings.overwriteExistingIndex) {
+      if (notify) {
+        new import_obsidian3.Notice(
+          `OKF: kept existing ${indexPath} ("Overwrite existing index.md" is off).`
+        );
+      }
+      return false;
+    }
+    const current = existing instanceof import_obsidian3.TFile ? await this.app.vault.read(existing) : null;
+    const kept = current === null ? "" : sectionBlock(current, this.settings.indexSubdirDescSection);
     const children = folder.children;
     const concepts = [];
     const subdirs = [];
@@ -1388,17 +1439,29 @@ Click to open the report`
         const fmTitle = fm["title"];
         const fmDesc = fm["description"];
         const title = typeof fmTitle === "string" && fmTitle.length > 0 ? fmTitle : basename(child.path);
-        const desc = typeof fmDesc === "string" ? fmDesc : "";
+        const desc = typeof fmDesc === "string" ? oneLine(fmDesc) : "";
         concepts.push({ link: encodeURI(child.name), title, desc });
       } else if (child instanceof import_obsidian3.TFolder) {
-        subdirs.push({ link: encodeURI(child.name) + "/", name: child.name });
+        const childIndex = this.app.vault.getAbstractFileByPath(
+          `${child.path}/index.md`
+        );
+        const hasIndex = childIndex instanceof import_obsidian3.TFile;
+        subdirs.push({
+          link: encodeURI(child.name) + (hasIndex ? "/index.md" : "/"),
+          name: child.name,
+          desc: hasIndex ? await this.folderDescription(childIndex) : ""
+        });
       }
     }
-    let out = "";
+    let out = kept ? `${kept}
+
+` : "";
     if (subdirs.length) {
       out += "# Subdirectories\n\n";
-      for (const s of subdirs) out += `* [${s.name}](${s.link}) - 
+      for (const s of subdirs) {
+        out += `* [${s.name}](${s.link})${s.desc ? " - " + s.desc : ""}
 `;
+      }
       out += "\n";
     }
     out += "# Concepts\n\n";
@@ -1407,7 +1470,6 @@ Click to open the report`
       out += `* [${c.title}](${c.link})${c.desc ? " - " + c.desc : ""}
 `;
     }
-    const indexPath = folder.path === "/" || folder.path === "" ? "index.md" : `${folder.path}/index.md`;
     if (indexPath === "index.md") {
       out = `---
 okf_version: "${OKF_VERSION}"
@@ -1415,10 +1477,8 @@ okf_version: "${OKF_VERSION}"
 
 ${out}`;
     }
-    const existing = this.app.vault.getAbstractFileByPath(indexPath);
     if (existing instanceof import_obsidian3.TFile) {
-      const current = await this.app.vault.read(existing);
-      if (current === out) return;
+      if (current === out) return false;
       this.selfWrites.add(indexPath);
       await this.app.vault.modify(existing, out);
     } else {
@@ -1426,6 +1486,18 @@ ${out}`;
       await this.app.vault.create(indexPath, out);
     }
     if (notify) new import_obsidian3.Notice(`OKF: wrote ${indexPath}`);
+    return true;
+  }
+  /**
+   * Description for a subdirectory entry, read from the configured section of
+   * that folder's index.md (e.g. `# Purpose`). Non-root indexes carry no
+   * frontmatter (§8), so a body section is the only place a folder can say what
+   * it is for.
+   */
+  async folderDescription(index) {
+    const section = this.settings.indexSubdirDescSection.trim();
+    if (!section) return "";
+    return sectionSummary(await this.app.vault.cachedRead(index), section);
   }
   async generateAllIndexes() {
     if (this.busy) {
@@ -1438,13 +1510,19 @@ ${out}`;
       for (const f of this.candidateFiles()) {
         if (f.parent) folders.add(f.parent);
       }
-      const list = [...folders];
+      const depth = (f) => f.path === "/" || f.path === "" ? 0 : f.path.split("/").length;
+      const list = [...folders].sort((a, b) => depth(b) - depth(a));
+      let written = 0;
       await this.processQueue(
         list,
-        (folder) => this.generateIndexForFolder(folder, false),
+        async (folder) => {
+          if (await this.generateIndexForFolder(folder, false)) written++;
+        },
         "OKF: building indexes"
       );
-      new import_obsidian3.Notice(`OKF: refreshed index.md in ${list.length} folder(s).`);
+      new import_obsidian3.Notice(
+        `OKF: updated index.md in ${written} of ${list.length} folder(s).`
+      );
     } finally {
       this.busy = false;
     }
@@ -1588,6 +1666,26 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.autoGenerateIndex).onChange((v) => {
             s.autoGenerateIndex = v;
+            save();
+          })
+        )
+      },
+      {
+        name: "Overwrite existing index.md",
+        desc: "On: generating an index rewrites the folder's existing index.md from its contents. Off: an existing index.md \u2014 and anything you wrote into it \u2014 is left untouched, and only missing ones are created.",
+        control: (row) => row.addToggle(
+          (tg) => tg.setValue(s.overwriteExistingIndex).onChange((v) => {
+            s.overwriteExistingIndex = v;
+            save();
+          })
+        )
+      },
+      {
+        name: "Subdirectory description section",
+        desc: "Heading in a subfolder's index.md whose first paragraph becomes that folder's description in the parent listing (e.g. `Purpose`). The section is preserved when that index is regenerated, so what you write there survives a refresh. Leave blank for no subdirectory descriptions. Subdirectory links always point at the folder's index.md when it has one.",
+        control: (row) => row.addText(
+          (t) => t.setPlaceholder("Purpose").setValue(s.indexSubdirDescSection).onChange((v) => {
+            s.indexSubdirDescSection = v.trim();
             save();
           })
         )

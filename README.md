@@ -19,7 +19,7 @@ OKF is an open, minimal convention for representing knowledge as a directory of 
 - **Auto-fix.** Inserts missing frontmatter (`type`, `title`, `generated`) non-destructively — it never overwrites values you've set.
 - **Prompt for required fields.** When a note is missing a meaningful `type`, a dialog lets you set `type`, `title`, and `description` directly.
 - **On-save & on-create hooks.** New notes, edited notes, and notes added by the **Importer** plugin are brought into conformance automatically.
-- **`index.md` generation.** Builds and refreshes OKF §8 directory listings (writing `okf_version` into the root index) so each folder is self-describing.
+- **`index.md` generation.** Builds and refreshes OKF §8 directory listings (writing `okf_version` into the root index) so each folder is self-describing. Concept entries carry their frontmatter `description` — as §8 recommends; subdirectory entries link to the folder's own `index.md` — never a bare `folder/` path that Obsidian would turn into a new note — and can pull their description from a named section (e.g. `# Purpose`) of that index, which a refresh carries over rather than overwrites. Generation can also be made fully non-destructive, leaving existing index files and anything hand-written in them alone.
 - **`log.md` entries.** Adds dated §9 changelog entries.
 - **Portent layer (opt-in, beta).** Optionally layer the [Portent](https://portent.md) knowledge-base spec on top of OKF — type vocabulary, lifecycle, and `belongs_to`/`related_to` relationships — surfaced as non-blocking warnings. The schema is fully free-form: rename fields (e.g. `status` → `state`), redefine the accepted vocabularies, and toggle each check independently, so you can match your own conventions or track the evolving pre-1.0 spec.
 - **Large-vault friendly.** Scans and fixes run through a batched, non-blocking queue with an inline progress bar — the UI never freezes.
@@ -48,6 +48,8 @@ Configure under **Settings → OKF Enforcer**:
 - **Default type for auto-fix** — value inserted into `type` when fixing notes that lack it.
 - **Default actor for `generated.by`** — the actor recorded when auto-fix adds a `generated` block (e.g. `okf-enforcer/0.3` or `human:<id>`).
 - **Live check on save / open**, **Scan vault on startup**, **Fix format issues on save**, **Auto-generate index.md**, **Auto-migrate to latest OKF on fix** — automation toggles.
+- **Overwrite existing index.md** — on by default (generate/refresh rewrites the listing). Turn it off to make index generation additive: missing `index.md` files are still created, but existing ones — and any prose you added to them — are never touched.
+- **Subdirectory description section** — heading in a subfolder's `index.md` whose first paragraph becomes that folder's description in the parent listing (e.g. `Purpose`). Blank by default, which leaves subdirectory entries undescribed. The named section is carried over when that index is regenerated, so the description you write survives a refresh.
 - **Batch size** — files processed per async chunk (lower = smoother UI on very large vaults).
 - **Warn on missing recommended fields / tags**, **Validate trust & lifecycle fields**, **Validate Attested Computation concepts**, **Check reserved files** — which checks to surface.
 - **Excluded folders** — paths skipped during validation (default: `Templates`). The Obsidian config folder (e.g. `.obsidian`) is always skipped automatically.

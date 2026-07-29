@@ -4,6 +4,33 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Non-destructive index generation** — new **Overwrite existing index.md**
+  setting (on by default, matching previous behavior). Turn it off and index
+  generation becomes additive: a folder missing `index.md` still gets one, but an
+  existing index — and any prose hand-written into it — is left untouched.
+- **Subdirectory descriptions** — new **Subdirectory description section**
+  setting names a heading in a subfolder's `index.md` (e.g. `Purpose`) whose
+  first paragraph becomes that folder's description in the parent listing. Blank
+  by default. Non-root indexes carry no frontmatter (§8), so a body section is
+  the only place a folder can describe itself. That section is preserved when
+  the index is regenerated, so it survives a refresh even with overwrite on.
+
+### Changed
+- Subdirectory entries in a generated `index.md` now link to the folder's
+  `index.md` when it has one, instead of a bare `folder/` path — clicking that
+  path in Obsidian's default settings created a new, empty note.
+- "Generate/refresh index.md for ALL folders" now processes deepest folders
+  first, so each parent listing sees its children's freshly written indexes.
+- Descriptions in generated listings are collapsed to a single line and clipped
+  at 200 characters, so a multi-line `description` can't break a bullet.
+- A subdirectory entry with no description no longer emits a trailing `-`.
+- "Generate/refresh index.md for ALL folders" reports how many indexes actually
+  changed (`updated index.md in X of Y folder(s)`) rather than how many folders
+  it visited.
+
 ## [0.3.0] - 2026-07-27
 
 Targets **OKF v0.2** (was v0.1). A v0.2 consumer still accepts v0.1 bundles via
