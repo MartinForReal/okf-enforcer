@@ -912,7 +912,7 @@ class OkfSettingTab extends PluginSettingTab {
       },
       {
         name: "Auto-generate index.md",
-        desc: "Keep a folder's index.md (§8 listing) up to date when its notes change. A folder with something to list gets an index generated; an existing one has missing entries added, or is rebuilt if \"Rebuild existing index.md\" is on.",
+        desc: "Keep a folder's index.md (§8 listing) up to date when its notes change. A folder with something to list gets an index generated; an existing one has missing entries added and wrong links corrected, or is rebuilt if \"Rebuild existing index.md\" is on.",
         control: (row) =>
           row.addToggle((tg) =>
             tg.setValue(s.autoGenerateIndex).onChange((v) => {
@@ -923,7 +923,7 @@ class OkfSettingTab extends PluginSettingTab {
       },
       {
         name: "Rebuild existing index.md",
-        desc: "Off (default): generating an index adds only the entries it doesn't already list, leaving your prose, ordering, and edited descriptions untouched. On: the listing is rewritten from the folder's contents, which also drops entries for notes that no longer exist.",
+        desc: "Off (default): generating an index adds the entries it doesn't already list and corrects a link that points at the wrong path, leaving your prose, ordering, titles, and edited descriptions untouched. On: the listing is rewritten from the folder's contents, which also drops entries for notes that no longer exist.",
         control: (row) =>
           row.addToggle((tg) =>
             tg.setValue(s.overwriteExistingIndex).onChange((v) => {
@@ -934,7 +934,7 @@ class OkfSettingTab extends PluginSettingTab {
       },
       {
         name: "Subdirectory description section",
-        desc: "Heading in a subfolder's index.md whose first paragraph becomes that folder's description in the parent listing (e.g. `Purpose`). The section is preserved when that index is regenerated, so what you write there survives a refresh. Leave blank for no subdirectory descriptions. Subdirectory links always point at the folder's index.md when it has one.",
+        desc: "Heading in a subfolder's index.md whose first paragraph becomes that folder's description in the parent listing (e.g. `Purpose`). The section is preserved when that index is regenerated, so what you write there survives a refresh. Leave blank for no subdirectory descriptions. Subdirectory entries always link at the folder's own index.md.",
         control: (row) =>
           row.addText((t) =>
             t

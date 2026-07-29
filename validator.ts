@@ -272,29 +272,52 @@ export function renderEntry(e: IndexEntry): string {
 }
 
 const BULLET_RE = /^\s*[*\-+]\s+\S/;
-// The destination runs to the closing paren, not to the first space: a
-// hand-written entry may link at `my notes/` with the space left unescaped.
-const BULLET_LINK_RE = /^\s*[*\-+]\s+\[[^\]]*\]\(([^)]*)\)/;
+// Split so a destination can be replaced in place: everything up to the opening
+// paren, then the destination itself. It runs to the closing paren rather than
+// the first space, since a hand-written entry may link at `my notes/` with the
+// space left unescaped.
+const BULLET_LINK_RE = /^(\s*[*\-+]\s+\[[^\]]*\]\()([^)]*)\)/;
 const PLACEHOLDER_RE = /^\s*_No .+ yet\._\s*$/;
+
+/**
+ * A markdown destination split into what it points at and any trailing link
+ * title, so a corrected destination keeps the `"…"` an author wrote after it.
+ */
+function splitDest(dest: string): { target: string; trailer: string } {
+  const rest = dest.replace(/^\s+/, "");
+  const angled = rest.match(/^<([^>]*)>/);
+  if (angled) {
+    return { target: angled[1], trailer: rest.slice(angled[0].length) };
+  }
+  const title = rest.search(/\s+["'(]/);
+  return title < 0
+    ? { target: rest.trimEnd(), trailer: "" }
+    : { target: rest.slice(0, title), trailer: rest.slice(title) };
+}
+
+/** A target with its escapes resolved, so `my%20notes` and `my notes` compare equal. */
+function decodePath(target: string): string {
+  const t = target.replace(/^\.\//, "");
+  try {
+    return decodeURI(t);
+  } catch {
+    // A malformed escape is compared as written rather than dropped.
+    return t;
+  }
+}
+
+/** Whether two destinations resolve to the same file — `./a.md` and `a.md` do. */
+function sameTarget(a: string, b: string): boolean {
+  return decodePath(a) === decodePath(b);
+}
 
 /**
  * A link reduced to what identifies the thing it points at, so a folder listed
  * as `notes/` and the same folder rendered as `notes/index.md` are recognized
  * as one entry rather than appended twice.
  */
-function linkKey(link: string): string {
-  let t = link.trim();
-  // Neither an angle-bracket wrapper nor a trailing title is part of the
-  // destination.
-  const angled = t.match(/^<([^>]*)>/);
-  t = (angled ? angled[1] : t.replace(/\s+["'(].*$/, "")).trim();
-  t = t.replace(/^\.\//, "");
-  try {
-    t = decodeURI(t);
-  } catch {
-    // A malformed escape is compared as written rather than dropped.
-  }
-  return t
+function linkKey(dest: string): string {
+  return decodePath(splitDest(dest).target)
     .replace(/\/index\.md$/i, "")
     .replace(/\/+$/, "")
     .toLowerCase();
@@ -316,10 +339,34 @@ export function renderIndex(entries: IndexEntry[], keep = ""): string {
 }
 
 /**
+ * Per-line flag marking fenced code blocks, including the fence markers. A
+ * bullet in there is sample text — a root index that documents the format is
+ * not listing the folders it shows — so it is neither an entry to correct nor a
+ * place to append one.
+ */
+function fencedLines(lines: string[]): boolean[] {
+  const mask: boolean[] = [];
+  let fence = "";
+  for (const line of lines) {
+    const open = line.match(/^\s{0,3}(`{3,}|~{3,})/);
+    if (open) {
+      if (!fence) fence = open[1][0];
+      else if (open[1][0] === fence) fence = "";
+      mask.push(true);
+      continue;
+    }
+    mask.push(fence !== "");
+  }
+  return mask;
+}
+
+/**
  * Adds the entries an index doesn't list yet, under their section headings, and
- * leaves everything else exactly as written — prose, ordering, hand-edited
- * descriptions, and sections this plugin knows nothing about. Returns `existing`
- * unchanged when there is nothing new to add, so no write is needed.
+ * corrects the destination of one that points at the right thing by the wrong
+ * path. Everything else is left exactly as written — prose, ordering, entry
+ * titles, hand-edited descriptions, and sections this plugin knows nothing
+ * about. Returns `existing` unchanged when there is nothing to add or fix, so
+ * no write is needed.
  */
 export function mergeIndex(existing: string, entries: IndexEntry[]): string {
   const { body } = splitFrontmatter(existing);
@@ -327,25 +374,46 @@ export function mergeIndex(existing: string, entries: IndexEntry[]): string {
   const eol = existing.includes("\r\n") ? "\r\n" : "\n";
   const lines = body.split(/\r?\n/);
 
-  const listed = new Set<string>();
-  for (const line of lines) {
-    const m = line.match(BULLET_LINK_RE);
-    if (m) listed.add(linkKey(m[1]));
-  }
-  const missing = entries.filter((e) => !listed.has(linkKey(e.link)));
-  if (missing.length === 0) return existing;
+  const canonical = new Map<string, string>();
+  for (const e of entries) canonical.set(linkKey(e.link), e.link);
 
-  const sections: string[] = [];
-  for (const e of missing) {
-    if (!sections.includes(e.section)) sections.push(e.section);
+  const listed = new Set<string>();
+  const fenced = fencedLines(lines);
+  let changed = false;
+  for (let i = 0; i < lines.length; i++) {
+    if (fenced[i]) continue;
+    const m = lines[i].match(BULLET_LINK_RE);
+    if (!m) continue;
+    const key = linkKey(m[2]);
+    listed.add(key);
+    const want = canonical.get(key);
+    const { target, trailer } = splitDest(m[2]);
+    // Right thing, wrong path — a subdirectory listed as `sub/` instead of
+    // `sub/index.md`, which Obsidian turns into a new empty note when clicked.
+    // Only the destination is rewritten; the rest of the entry is the author's.
+    if (want !== undefined && !sameTarget(target, want)) {
+      lines[i] =
+        m[1] + want + trailer + lines[i].slice(m[1].length + m[2].length);
+      changed = true;
+    }
   }
-  for (const section of sections) {
-    appendToSection(
-      lines,
-      section,
-      missing.filter((e) => e.section === section).map(renderEntry)
-    );
+
+  const missing = entries.filter((e) => !listed.has(linkKey(e.link)));
+  if (missing.length > 0) {
+    const sections: string[] = [];
+    for (const e of missing) {
+      if (!sections.includes(e.section)) sections.push(e.section);
+    }
+    for (const section of sections) {
+      appendToSection(
+        lines,
+        section,
+        missing.filter((e) => e.section === section).map(renderEntry)
+      );
+    }
+    changed = true;
   }
+  if (!changed) return existing;
 
   while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
   return prefix + lines.join(eol) + eol;
@@ -367,16 +435,20 @@ function appendToSection(
 
   let end = start + 1;
   while (end < lines.length && !/^#{1,6}\s+\S/.test(lines[end])) end++;
+  const fenced = fencedLines(lines);
   // A placeholder left by an earlier empty listing gives way to real entries.
   for (let i = end - 1; i > start; i--) {
-    if (PLACEHOLDER_RE.test(lines[i])) {
+    if (!fenced[i] && PLACEHOLDER_RE.test(lines[i])) {
       lines.splice(i, 1);
+      fenced.splice(i, 1);
       end--;
     }
   }
 
   let at = -1;
-  for (let i = start + 1; i < end; i++) if (BULLET_RE.test(lines[i])) at = i + 1;
+  for (let i = start + 1; i < end; i++) {
+    if (!fenced[i] && BULLET_RE.test(lines[i])) at = i + 1;
+  }
   if (at < 0) {
     // No list yet: start one below the heading and any prose under it.
     at = end;

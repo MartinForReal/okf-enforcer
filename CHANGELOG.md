@@ -25,6 +25,15 @@ one that exists is validated against §8.
   entries. The new **Rebuild existing index.md** setting (off by default)
   restores rewrite-from-scratch, which also prunes entries for notes that are
   gone. (#8)
+- **Link repair** — an entry that points at the right thing by the wrong path
+  has its destination corrected in place: `sub/`, `sub`, `<sub/>`, and a
+  mis-cased or differently escaped path all become `sub/index.md`. Only the
+  destination changes; the entry's title, description, and position are the
+  author's. Equivalent spellings are left alone (`./a.md` resolves the same as
+  `a.md`), as are entries for things the folder no longer holds — pruning is
+  still **Rebuild existing index.md**. Bullets inside a fenced code block are
+  sample text, so an index that documents the format is neither rewritten nor
+  appended to inside the fence. (#8)
 - **Subdirectory descriptions** — new **Subdirectory description section**
   setting names a heading in a subfolder's `index.md` (e.g. `Purpose`) whose
   first paragraph becomes that folder's description in the parent listing. Blank
@@ -40,10 +49,11 @@ one that exists is validated against §8.
   as it is rather than blanked.
 - Subdirectory entries in a generated `index.md` now link to that folder's own
   `index.md` rather than a bare `folder/` path — clicking the bare path in
-  Obsidian's default settings created a new, empty note. A subfolder is listed
-  only when it has an index or holds something an index would list, so the link
-  points at a file that exists or is about to; a folder with neither is left out
-  rather than linked at an index that will never be written. (#8)
+  Obsidian's default settings created a new, empty note, and an index that
+  already has one gets it corrected. A subfolder is listed only when it has an
+  index or holds something an index would list, so the link points at a file
+  that exists or is about to; a folder with neither is left out rather than
+  linked at an index that will never be written. (#8)
 - "Generate/refresh index.md for ALL folders" now processes deepest folders
   first, so each parent listing sees its children's freshly written indexes.
 - Descriptions in generated listings are collapsed to a single line and clipped

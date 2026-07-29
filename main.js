@@ -249,18 +249,30 @@ function renderEntry(e) {
   return `* [${e.title}](${e.link})${e.desc ? ` - ${e.desc}` : ""}`;
 }
 var BULLET_RE = /^\s*[*\-+]\s+\S/;
-var BULLET_LINK_RE = /^\s*[*\-+]\s+\[[^\]]*\]\(([^)]*)\)/;
+var BULLET_LINK_RE = /^(\s*[*\-+]\s+\[[^\]]*\]\()([^)]*)\)/;
 var PLACEHOLDER_RE = /^\s*_No .+ yet\._\s*$/;
-function linkKey(link) {
-  let t = link.trim();
-  const angled = t.match(/^<([^>]*)>/);
-  t = (angled ? angled[1] : t.replace(/\s+["'(].*$/, "")).trim();
-  t = t.replace(/^\.\//, "");
-  try {
-    t = decodeURI(t);
-  } catch (e) {
+function splitDest(dest) {
+  const rest = dest.replace(/^\s+/, "");
+  const angled = rest.match(/^<([^>]*)>/);
+  if (angled) {
+    return { target: angled[1], trailer: rest.slice(angled[0].length) };
   }
-  return t.replace(/\/index\.md$/i, "").replace(/\/+$/, "").toLowerCase();
+  const title = rest.search(/\s+["'(]/);
+  return title < 0 ? { target: rest.trimEnd(), trailer: "" } : { target: rest.slice(0, title), trailer: rest.slice(title) };
+}
+function decodePath(target) {
+  const t = target.replace(/^\.\//, "");
+  try {
+    return decodeURI(t);
+  } catch (e) {
+    return t;
+  }
+}
+function sameTarget(a, b) {
+  return decodePath(a) === decodePath(b);
+}
+function linkKey(dest) {
+  return decodePath(splitDest(dest).target).replace(/\/index\.md$/i, "").replace(/\/+$/, "").toLowerCase();
 }
 function renderIndex(entries, keep = "") {
   let out = keep ? `${keep}
@@ -280,29 +292,60 @@ function renderIndex(entries, keep = "") {
   }
   return out;
 }
+function fencedLines(lines) {
+  const mask = [];
+  let fence = "";
+  for (const line of lines) {
+    const open = line.match(/^\s{0,3}(`{3,}|~{3,})/);
+    if (open) {
+      if (!fence) fence = open[1][0];
+      else if (open[1][0] === fence) fence = "";
+      mask.push(true);
+      continue;
+    }
+    mask.push(fence !== "");
+  }
+  return mask;
+}
 function mergeIndex(existing, entries) {
   const { body } = splitFrontmatter(existing);
   const prefix = existing.slice(0, existing.length - body.length);
   const eol = existing.includes("\r\n") ? "\r\n" : "\n";
   const lines = body.split(/\r?\n/);
+  const canonical = /* @__PURE__ */ new Map();
+  for (const e of entries) canonical.set(linkKey(e.link), e.link);
   const listed = /* @__PURE__ */ new Set();
-  for (const line of lines) {
-    const m = line.match(BULLET_LINK_RE);
-    if (m) listed.add(linkKey(m[1]));
+  const fenced = fencedLines(lines);
+  let changed = false;
+  for (let i = 0; i < lines.length; i++) {
+    if (fenced[i]) continue;
+    const m = lines[i].match(BULLET_LINK_RE);
+    if (!m) continue;
+    const key = linkKey(m[2]);
+    listed.add(key);
+    const want = canonical.get(key);
+    const { target, trailer } = splitDest(m[2]);
+    if (want !== void 0 && !sameTarget(target, want)) {
+      lines[i] = m[1] + want + trailer + lines[i].slice(m[1].length + m[2].length);
+      changed = true;
+    }
   }
   const missing = entries.filter((e) => !listed.has(linkKey(e.link)));
-  if (missing.length === 0) return existing;
-  const sections = [];
-  for (const e of missing) {
-    if (!sections.includes(e.section)) sections.push(e.section);
+  if (missing.length > 0) {
+    const sections = [];
+    for (const e of missing) {
+      if (!sections.includes(e.section)) sections.push(e.section);
+    }
+    for (const section of sections) {
+      appendToSection(
+        lines,
+        section,
+        missing.filter((e) => e.section === section).map(renderEntry)
+      );
+    }
+    changed = true;
   }
-  for (const section of sections) {
-    appendToSection(
-      lines,
-      section,
-      missing.filter((e) => e.section === section).map(renderEntry)
-    );
-  }
+  if (!changed) return existing;
   while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
   return prefix + lines.join(eol) + eol;
 }
@@ -316,14 +359,18 @@ function appendToSection(lines, section, items) {
   }
   let end = start + 1;
   while (end < lines.length && !/^#{1,6}\s+\S/.test(lines[end])) end++;
+  const fenced = fencedLines(lines);
   for (let i = end - 1; i > start; i--) {
-    if (PLACEHOLDER_RE.test(lines[i])) {
+    if (!fenced[i] && PLACEHOLDER_RE.test(lines[i])) {
       lines.splice(i, 1);
+      fenced.splice(i, 1);
       end--;
     }
   }
   let at = -1;
-  for (let i = start + 1; i < end; i++) if (BULLET_RE.test(lines[i])) at = i + 1;
+  for (let i = start + 1; i < end; i++) {
+    if (!fenced[i] && BULLET_RE.test(lines[i])) at = i + 1;
+  }
   if (at < 0) {
     at = end;
     while (at > start + 1 && !lines[at - 1].trim()) at--;
@@ -1759,7 +1806,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       },
       {
         name: "Auto-generate index.md",
-        desc: `Keep a folder's index.md (\xA78 listing) up to date when its notes change. A folder with something to list gets an index generated; an existing one has missing entries added, or is rebuilt if "Rebuild existing index.md" is on.`,
+        desc: `Keep a folder's index.md (\xA78 listing) up to date when its notes change. A folder with something to list gets an index generated; an existing one has missing entries added and wrong links corrected, or is rebuilt if "Rebuild existing index.md" is on.`,
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.autoGenerateIndex).onChange((v) => {
             s.autoGenerateIndex = v;
@@ -1769,7 +1816,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       },
       {
         name: "Rebuild existing index.md",
-        desc: "Off (default): generating an index adds only the entries it doesn't already list, leaving your prose, ordering, and edited descriptions untouched. On: the listing is rewritten from the folder's contents, which also drops entries for notes that no longer exist.",
+        desc: "Off (default): generating an index adds the entries it doesn't already list and corrects a link that points at the wrong path, leaving your prose, ordering, titles, and edited descriptions untouched. On: the listing is rewritten from the folder's contents, which also drops entries for notes that no longer exist.",
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.overwriteExistingIndex).onChange((v) => {
             s.overwriteExistingIndex = v;
@@ -1779,7 +1826,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       },
       {
         name: "Subdirectory description section",
-        desc: "Heading in a subfolder's index.md whose first paragraph becomes that folder's description in the parent listing (e.g. `Purpose`). The section is preserved when that index is regenerated, so what you write there survives a refresh. Leave blank for no subdirectory descriptions. Subdirectory links always point at the folder's index.md when it has one.",
+        desc: "Heading in a subfolder's index.md whose first paragraph becomes that folder's description in the parent listing (e.g. `Purpose`). The section is preserved when that index is regenerated, so what you write there survives a refresh. Leave blank for no subdirectory descriptions. Subdirectory entries always link at the folder's own index.md.",
         control: (row) => row.addText(
           (t) => t.setPlaceholder("Purpose").setValue(s.indexSubdirDescSection).onChange((v) => {
             s.indexSubdirDescSection = v.trim();
