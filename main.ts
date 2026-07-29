@@ -19,6 +19,7 @@ import {
   isReserved,
   isExcluded,
   basename,
+  parentPath,
   oneLine,
   sectionBlock,
   sectionSummary,
@@ -174,8 +175,27 @@ export default class OkfPlugin extends Plugin {
       })
     );
 
-    this.addSettingTab(new OkfSettingTab(this.app, this));
+    // ---- Deletes and renames. A note leaving a folder changes that folder's
+    // listing as much as one arriving does, and neither fires "modify" or
+    // "create". A rename touches two listings: the folder the note left and the
+    // one it joined. ----
+    this.registerEvent(
+      this.app.vault.on("delete", (file) => {
+        if (!this.layoutReady) return;
+        if (file instanceof TFile && file.extension !== "md") return;
+        this.markIndexDirty(parentPath(file.path));
+      })
+    );
+    this.registerEvent(
+      this.app.vault.on("rename", (file, oldPath) => {
+        if (!this.layoutReady) return;
+        if (file instanceof TFile && file.extension !== "md") return;
+        this.markIndexDirty(parentPath(oldPath));
+        this.markIndexDirty(parentPath(file.path));
+      })
+    );
 
+    this.addSettingTab(new OkfSettingTab(this.app, this));
     this.app.workspace.onLayoutReady(() => {
       this.layoutReady = true;
       // The panel is hidden by default simply because we never auto-open it;
@@ -276,9 +296,15 @@ export default class OkfPlugin extends Plugin {
     }
 
     if (this.settings.autoGenerateIndex && file.parent) {
-      this.dirtyIndexFolders.add(file.parent.path);
-      this.flushIndexes();
+      this.markIndexDirty(file.parent.path);
     }
+  }
+
+  /** Queues a folder's index.md for the next debounced regeneration. */
+  private markIndexDirty(path: string): void {
+    if (!this.settings.autoGenerateIndex) return;
+    this.dirtyIndexFolders.add(path);
+    this.flushIndexes();
   }
 
   private flushIndexes = debounce(
@@ -644,9 +670,10 @@ export default class OkfPlugin extends Plugin {
     const entries = [...subdirs, ...concepts];
     // §8: an index enumerates the directory's contents. A directory holding
     // nothing has no listing to write, so it gets no index rather than a stub
-    // that says so — and an index left behind by a folder since emptied is not
-    // blanked out.
-    if (entries.length === 0) {
+    // that says so. One that already exists is still maintained, or the entries
+    // in a folder since emptied would go on pointing at notes that are gone.
+    const maintaining = current !== null && !this.settings.overwriteExistingIndex;
+    if (entries.length === 0 && !maintaining) {
       if (notify) {
         new Notice(
           `OKF: nothing to list in ${folder.path || "/"}; left index.md alone.`
@@ -656,9 +683,17 @@ export default class OkfPlugin extends Plugin {
     }
 
     let out: string;
-    if (current !== null && !this.settings.overwriteExistingIndex) {
-      // Additive: append what the listing is missing and touch nothing else.
-      out = mergeIndex(current, entries);
+    if (maintaining) {
+      // Additive: add what the listing is missing, correct a link that points at
+      // the wrong path, drop one whose note this folder no longer holds, and
+      // touch nothing else.
+      const base =
+        folder.path === "/" || folder.path === "" ? "" : `${folder.path}/`;
+      out = mergeIndex(
+        current,
+        entries,
+        (target) => this.app.vault.getAbstractFileByPath(base + target) !== null
+      );
     } else {
       out = renderIndex(entries, kept);
       // The bundle-root index.md is the only place `okf_version` frontmatter is
@@ -912,7 +947,7 @@ class OkfSettingTab extends PluginSettingTab {
       },
       {
         name: "Auto-generate index.md",
-        desc: "Keep a folder's index.md (§8 listing) up to date when its notes change. A folder with something to list gets an index generated; an existing one has missing entries added and wrong links corrected, or is rebuilt if \"Rebuild existing index.md\" is on.",
+        desc: "Keep a folder's index.md (§8 listing) up to date as its notes are added, renamed, and deleted. A folder with something to list gets an index generated; an existing one has missing entries added, wrong links corrected, and entries for deleted notes removed, or is rebuilt if \"Rebuild existing index.md\" is on.",
         control: (row) =>
           row.addToggle((tg) =>
             tg.setValue(s.autoGenerateIndex).onChange((v) => {
@@ -923,7 +958,7 @@ class OkfSettingTab extends PluginSettingTab {
       },
       {
         name: "Rebuild existing index.md",
-        desc: "Off (default): generating an index adds the entries it doesn't already list and corrects a link that points at the wrong path, leaving your prose, ordering, titles, and edited descriptions untouched. On: the listing is rewritten from the folder's contents, which also drops entries for notes that no longer exist.",
+        desc: "Off (default): generating an index adds the entries it doesn't already list, corrects a link that points at the wrong path, and drops one whose note this folder no longer holds, leaving your prose, ordering, titles, and edited descriptions untouched. On: the listing is rewritten from the folder's contents, which also refreshes every description and re-sorts the entries.",
         control: (row) =>
           row.addToggle((tg) =>
             tg.setValue(s.overwriteExistingIndex).onChange((v) => {

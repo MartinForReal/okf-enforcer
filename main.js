@@ -193,6 +193,10 @@ function basename(path) {
   const f = path.split("/").pop() || path;
   return f.replace(/\.md$/i, "");
 }
+function parentPath(path) {
+  const cut = path.lastIndexOf("/");
+  return cut < 0 ? "/" : path.slice(0, cut);
+}
 function isReserved(path) {
   const f = (path.split("/").pop() || "").toLowerCase();
   if (f === "index.md") return "index";
@@ -307,7 +311,15 @@ function fencedLines(lines) {
   }
   return mask;
 }
-function mergeIndex(existing, entries) {
+function isOwnEntry(target) {
+  if (!target || target.startsWith("/") || target.startsWith("#")) return false;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(target)) return false;
+  const parts = target.replace(/\/+$/, "").split("/");
+  if (parts.some((p) => p === "" || p === "." || p === "..")) return false;
+  if (parts.length === 1) return true;
+  return parts.length === 2 && parts[1].toLowerCase() === "index.md";
+}
+function mergeIndex(existing, entries, exists) {
   const { body } = splitFrontmatter(existing);
   const prefix = existing.slice(0, existing.length - body.length);
   const eol = existing.includes("\r\n") ? "\r\n" : "\n";
@@ -315,20 +327,52 @@ function mergeIndex(existing, entries) {
   const canonical = /* @__PURE__ */ new Map();
   for (const e of entries) canonical.set(linkKey(e.link), e.link);
   const listed = /* @__PURE__ */ new Set();
+  const stale = [];
+  const emptied = /* @__PURE__ */ new Set();
   const fenced = fencedLines(lines);
+  let section = "";
   let changed = false;
   for (let i = 0; i < lines.length; i++) {
     if (fenced[i]) continue;
+    const head = lines[i].match(/^#{1,6}\s+(.+?)\s*#*\s*$/);
+    if (head) {
+      section = head[1].trim();
+      continue;
+    }
     const m = lines[i].match(BULLET_LINK_RE);
     if (!m) continue;
     const key = linkKey(m[2]);
     listed.add(key);
     const want = canonical.get(key);
     const { target, trailer } = splitDest(m[2]);
-    if (want !== void 0 && !sameTarget(target, want)) {
+    if (want === void 0) {
+      const path = decodePath(target).replace(/\/+$/, "");
+      if (exists && isOwnEntry(target) && !exists(path)) {
+        stale.push(i);
+        emptied.add(section);
+      }
+      continue;
+    }
+    if (!sameTarget(target, want)) {
       lines[i] = m[1] + want + trailer + lines[i].slice(m[1].length + m[2].length);
       changed = true;
     }
+  }
+  for (let i = stale.length - 1; i >= 0; i--) {
+    const at = stale[i];
+    lines.splice(at, 1);
+    if (at > 0 && at < lines.length && !lines[at - 1].trim() && !lines[at].trim()) {
+      lines.splice(at, 1);
+    }
+    changed = true;
+  }
+  for (const name of emptied) {
+    if (!name) continue;
+    const at = headingIndex(lines, name);
+    if (at < 0) continue;
+    let end = at + 1;
+    while (end < lines.length && !/^#{1,6}\s+\S/.test(lines[end])) end++;
+    if (lines.slice(at + 1, end).every((l) => !l.trim())) lines.splice(at, end - at);
   }
   const missing = entries.filter((e) => !listed.has(linkKey(e.link)));
   if (missing.length > 0) {
@@ -336,11 +380,11 @@ function mergeIndex(existing, entries) {
     for (const e of missing) {
       if (!sections.includes(e.section)) sections.push(e.section);
     }
-    for (const section of sections) {
+    for (const section2 of sections) {
       appendToSection(
         lines,
-        section,
-        missing.filter((e) => e.section === section).map(renderEntry)
+        section2,
+        missing.filter((e) => e.section === section2).map(renderEntry)
       );
     }
     changed = true;
@@ -1203,6 +1247,21 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
         }
       })
     );
+    this.registerEvent(
+      this.app.vault.on("delete", (file) => {
+        if (!this.layoutReady) return;
+        if (file instanceof import_obsidian3.TFile && file.extension !== "md") return;
+        this.markIndexDirty(parentPath(file.path));
+      })
+    );
+    this.registerEvent(
+      this.app.vault.on("rename", (file, oldPath) => {
+        if (!this.layoutReady) return;
+        if (file instanceof import_obsidian3.TFile && file.extension !== "md") return;
+        this.markIndexDirty(parentPath(oldPath));
+        this.markIndexDirty(parentPath(file.path));
+      })
+    );
     this.addSettingTab(new OkfSettingTab(this.app, this));
     this.app.workspace.onLayoutReady(() => {
       this.layoutReady = true;
@@ -1279,9 +1338,14 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
       }
     }
     if (this.settings.autoGenerateIndex && file.parent) {
-      this.dirtyIndexFolders.add(file.parent.path);
-      this.flushIndexes();
+      this.markIndexDirty(file.parent.path);
     }
+  }
+  /** Queues a folder's index.md for the next debounced regeneration. */
+  markIndexDirty(path) {
+    if (!this.settings.autoGenerateIndex) return;
+    this.dirtyIndexFolders.add(path);
+    this.flushIndexes();
   }
   /**
    * Status-bar click: auto-fix the active note, then — if required fields
@@ -1582,7 +1646,8 @@ Click to open the report`
       }
     }
     const entries = [...subdirs, ...concepts];
-    if (entries.length === 0) {
+    const maintaining = current !== null && !this.settings.overwriteExistingIndex;
+    if (entries.length === 0 && !maintaining) {
       if (notify) {
         new import_obsidian3.Notice(
           `OKF: nothing to list in ${folder.path || "/"}; left index.md alone.`
@@ -1591,8 +1656,13 @@ Click to open the report`
       return false;
     }
     let out;
-    if (current !== null && !this.settings.overwriteExistingIndex) {
-      out = mergeIndex(current, entries);
+    if (maintaining) {
+      const base = folder.path === "/" || folder.path === "" ? "" : `${folder.path}/`;
+      out = mergeIndex(
+        current,
+        entries,
+        (target) => this.app.vault.getAbstractFileByPath(base + target) !== null
+      );
     } else {
       out = renderIndex(entries, kept);
       if (indexPath === "index.md") {
@@ -1806,7 +1876,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       },
       {
         name: "Auto-generate index.md",
-        desc: `Keep a folder's index.md (\xA78 listing) up to date when its notes change. A folder with something to list gets an index generated; an existing one has missing entries added and wrong links corrected, or is rebuilt if "Rebuild existing index.md" is on.`,
+        desc: `Keep a folder's index.md (\xA78 listing) up to date as its notes are added, renamed, and deleted. A folder with something to list gets an index generated; an existing one has missing entries added, wrong links corrected, and entries for deleted notes removed, or is rebuilt if "Rebuild existing index.md" is on.`,
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.autoGenerateIndex).onChange((v) => {
             s.autoGenerateIndex = v;
@@ -1816,7 +1886,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       },
       {
         name: "Rebuild existing index.md",
-        desc: "Off (default): generating an index adds the entries it doesn't already list and corrects a link that points at the wrong path, leaving your prose, ordering, titles, and edited descriptions untouched. On: the listing is rewritten from the folder's contents, which also drops entries for notes that no longer exist.",
+        desc: "Off (default): generating an index adds the entries it doesn't already list, corrects a link that points at the wrong path, and drops one whose note this folder no longer holds, leaving your prose, ordering, titles, and edited descriptions untouched. On: the listing is rewritten from the folder's contents, which also refreshes every description and re-sorts the entries.",
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.overwriteExistingIndex).onChange((v) => {
             s.overwriteExistingIndex = v;

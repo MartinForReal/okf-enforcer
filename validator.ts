@@ -178,6 +178,16 @@ export function basename(path: string): string {
   return f.replace(/\.md$/i, "");
 }
 
+/**
+ * The folder holding `path`, written the way Obsidian paths its folders — `/`
+ * for the vault root. Derived from the path rather than a `parent` reference,
+ * which is gone by the time a delete is reported and stale after a rename.
+ */
+export function parentPath(path: string): string {
+  const cut = path.lastIndexOf("/");
+  return cut < 0 ? "/" : path.slice(0, cut);
+}
+
 export function isReserved(path: string): "index" | "log" | null {
   const f = (path.split("/").pop() || "").toLowerCase();
   if (f === "index.md") return "index";
@@ -361,14 +371,38 @@ function fencedLines(lines: string[]): boolean[] {
 }
 
 /**
- * Adds the entries an index doesn't list yet, under their section headings, and
- * corrects the destination of one that points at the right thing by the wrong
- * path. Everything else is left exactly as written — prose, ordering, entry
- * titles, hand-edited descriptions, and sections this plugin knows nothing
- * about. Returns `existing` unchanged when there is nothing to add or fix, so
- * no write is needed.
+ * Whether a destination names something the folder holds directly, and so is
+ * this plugin's to remove once it's gone: `a.md`, `sub`, `sub/`, or
+ * `sub/index.md`. Anything else — a cross-link deeper into the tree, a path out
+ * of the folder, an absolute bundle path, a URL, a bare anchor — belongs to
+ * whoever wrote it and is left alone however broken it is (§6.1).
  */
-export function mergeIndex(existing: string, entries: IndexEntry[]): string {
+function isOwnEntry(target: string): boolean {
+  if (!target || target.startsWith("/") || target.startsWith("#")) return false;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(target)) return false;
+  const parts = target.replace(/\/+$/, "").split("/");
+  if (parts.some((p) => p === "" || p === "." || p === "..")) return false;
+  if (parts.length === 1) return true;
+  return parts.length === 2 && parts[1].toLowerCase() === "index.md";
+}
+
+/**
+ * Adds the entries an index doesn't list yet, under their section headings,
+ * corrects the destination of one that points at the right thing by the wrong
+ * path, and drops one whose note the folder no longer holds. Everything else is
+ * left exactly as written — prose, ordering, entry titles, hand-edited
+ * descriptions, and sections this plugin knows nothing about. Returns
+ * `existing` unchanged when there is nothing to do, so no write is needed.
+ *
+ * `exists` reports whether a path relative to this folder still resolves in the
+ * vault. Without it nothing is dropped, since a link that can't be checked
+ * can't be known to be stale.
+ */
+export function mergeIndex(
+  existing: string,
+  entries: IndexEntry[],
+  exists?: (target: string) => boolean
+): string {
   const { body } = splitFrontmatter(existing);
   const prefix = existing.slice(0, existing.length - body.length);
   const eol = existing.includes("\r\n") ? "\r\n" : "\n";
@@ -378,24 +412,63 @@ export function mergeIndex(existing: string, entries: IndexEntry[]): string {
   for (const e of entries) canonical.set(linkKey(e.link), e.link);
 
   const listed = new Set<string>();
+  const stale: number[] = [];
+  const emptied = new Set<string>();
   const fenced = fencedLines(lines);
+  let section = "";
   let changed = false;
   for (let i = 0; i < lines.length; i++) {
     if (fenced[i]) continue;
+    const head = lines[i].match(/^#{1,6}\s+(.+?)\s*#*\s*$/);
+    if (head) {
+      section = head[1].trim();
+      continue;
+    }
     const m = lines[i].match(BULLET_LINK_RE);
     if (!m) continue;
     const key = linkKey(m[2]);
     listed.add(key);
     const want = canonical.get(key);
     const { target, trailer } = splitDest(m[2]);
+    if (want === undefined) {
+      // Not in the listing this folder would generate. If it named a note the
+      // folder held and that note is gone, the entry goes with it.
+      const path = decodePath(target).replace(/\/+$/, "");
+      if (exists && isOwnEntry(target) && !exists(path)) {
+        stale.push(i);
+        emptied.add(section);
+      }
+      continue;
+    }
     // Right thing, wrong path — a subdirectory listed as `sub/` instead of
     // `sub/index.md`, which Obsidian turns into a new empty note when clicked.
     // Only the destination is rewritten; the rest of the entry is the author's.
-    if (want !== undefined && !sameTarget(target, want)) {
+    if (!sameTarget(target, want)) {
       lines[i] =
         m[1] + want + trailer + lines[i].slice(m[1].length + m[2].length);
       changed = true;
     }
+  }
+
+  for (let i = stale.length - 1; i >= 0; i--) {
+    const at = stale[i];
+    lines.splice(at, 1);
+    // Don't leave the blank line that set the entry off doubled up.
+    if (at > 0 && at < lines.length && !lines[at - 1].trim() && !lines[at].trim()) {
+      lines.splice(at, 1);
+    }
+    changed = true;
+  }
+  // A heading left with nothing under it by that pruning is a listing for a
+  // section that no longer has anything in it. Prose the author wrote under the
+  // heading keeps it.
+  for (const name of emptied) {
+    if (!name) continue;
+    const at = headingIndex(lines, name);
+    if (at < 0) continue;
+    let end = at + 1;
+    while (end < lines.length && !/^#{1,6}\s+\S/.test(lines[end])) end++;
+    if (lines.slice(at + 1, end).every((l) => !l.trim())) lines.splice(at, end - at);
   }
 
   const missing = entries.filter((e) => !listed.has(linkKey(e.link)));
