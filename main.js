@@ -169,7 +169,6 @@ var DEFAULT_SETTINGS = {
   checkAttestedComputation: true,
   warnTagsField: false,
   warnBrokenLinks: false,
-  checkReservedFiles: true,
   liveCheckOnSave: true,
   scanOnStartup: true,
   fixOnSave: true,
@@ -248,8 +247,8 @@ function sectionBlock(content, section) {
 }
 function validateContent(path, content, isRoot, settings) {
   const reserved = isReserved(path);
-  if (reserved === "index") return validateIndex(content, isRoot, settings);
-  if (reserved === "log") return validateLog(content, settings);
+  if (reserved === "index") return validateIndex(content, isRoot);
+  if (reserved === "log") return validateLog(content);
   return validateConcept(path, content, settings);
 }
 function validateConcept(path, content, settings) {
@@ -559,9 +558,8 @@ function validateAttestedComputation(data, content) {
   }
   return issues;
 }
-function validateIndex(content, isRoot, settings) {
+function validateIndex(content, isRoot) {
   const issues = [];
-  if (!settings.checkReservedFiles) return issues;
   const split = splitFrontmatter(content);
   const hasFm = split.hasFm;
   const raw = split.raw;
@@ -627,9 +625,8 @@ function validateIndex(content, isRoot, settings) {
   }
   return issues;
 }
-function validateLog(content, settings) {
+function validateLog(content) {
   const issues = [];
-  if (!settings.checkReservedFiles) return issues;
   const { hasFm } = splitFrontmatter(content);
   if (hasFm) {
     issues.push({
@@ -943,7 +940,7 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
         for (const path of folders) {
           const folder = this.app.vault.getAbstractFileByPath(path);
           if (folder instanceof import_obsidian3.TFolder) {
-            await this.generateIndexForFolder(folder, false, false);
+            await this.generateIndexForFolder(folder, false);
           }
         }
       },
@@ -1410,7 +1407,7 @@ Click to open the report`
     await this.scanVault();
   }
   /** Writes the folder's index.md; returns whether the file changed on disk. */
-  async generateIndexForFolder(folder, notify = true, createMissing = true) {
+  async generateIndexForFolder(folder, notify = true) {
     var _a, _b;
     if (!folder) {
       if (notify) new import_obsidian3.Notice("OKF: no folder for the active note.");
@@ -1418,7 +1415,6 @@ Click to open the report`
     }
     const indexPath = folder.path === "/" || folder.path === "" ? "index.md" : `${folder.path}/index.md`;
     const existing = this.app.vault.getAbstractFileByPath(indexPath);
-    if (!(existing instanceof import_obsidian3.TFile) && !createMissing) return false;
     if (existing instanceof import_obsidian3.TFile && !this.settings.overwriteExistingIndex) {
       if (notify) {
         new import_obsidian3.Notice(
@@ -1663,7 +1659,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       },
       {
         name: "Auto-generate index.md",
-        desc: "Refresh a folder's index.md (\xA78 listing) automatically when its notes change. Only folders that already have an index.md are refreshed \u2014 \xA78 makes index files optional, so this never creates one. Use the generate commands to add an index to a folder.",
+        desc: `Keep a folder's index.md (\xA78 listing) up to date when its notes change. A folder without one gets it generated; an existing index is rewritten only if "Overwrite existing index.md" is on, and is validated either way.`,
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.autoGenerateIndex).onChange((v) => {
             s.autoGenerateIndex = v;
@@ -1748,16 +1744,6 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.warnTagsField).onChange((v) => {
             s.warnTagsField = v;
-            save();
-          })
-        )
-      },
-      {
-        name: "Check reserved files (index.md / log.md)",
-        desc: "Validate \xA76 and \xA77 structure.",
-        control: (row) => row.addToggle(
-          (tg) => tg.setValue(s.checkReservedFiles).onChange((v) => {
-            s.checkReservedFiles = v;
             save();
           })
         )

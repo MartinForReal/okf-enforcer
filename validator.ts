@@ -73,7 +73,6 @@ export interface OkfSettings extends PortentSettings {
   checkAttestedComputation: boolean;
   warnTagsField: boolean;
   warnBrokenLinks: boolean;
-  checkReservedFiles: boolean;
   liveCheckOnSave: boolean;
   scanOnStartup: boolean;
   fixOnSave: boolean;
@@ -111,7 +110,6 @@ export const DEFAULT_SETTINGS: OkfSettings = {
   checkAttestedComputation: true,
   warnTagsField: false,
   warnBrokenLinks: false,
-  checkReservedFiles: true,
   liveCheckOnSave: true,
   scanOnStartup: true,
   fixOnSave: true,
@@ -264,8 +262,8 @@ export function validateContent(
   settings: OkfSettings
 ): OkfIssue[] {
   const reserved = isReserved(path);
-  if (reserved === "index") return validateIndex(content, isRoot, settings);
-  if (reserved === "log") return validateLog(content, settings);
+  if (reserved === "index") return validateIndex(content, isRoot);
+  if (reserved === "log") return validateLog(content);
   return validateConcept(path, content, settings);
 }
 
@@ -657,13 +655,13 @@ function validateAttestedComputation(
   return issues;
 }
 
-function validateIndex(
-  content: string,
-  isRoot: boolean,
-  settings: OkfSettings
-): OkfIssue[] {
+/**
+ * §11 rule 3: a reserved file follows §8 when present. Not optional — the
+ * structure of an `index.md` that exists is part of what makes a bundle
+ * conformant, while a *missing* one is explicitly permitted (§8, §11).
+ */
+function validateIndex(content: string, isRoot: boolean): OkfIssue[] {
   const issues: OkfIssue[] = [];
-  if (!settings.checkReservedFiles) return issues;
 
   const split = splitFrontmatter(content);
   const hasFm = split.hasFm;
@@ -740,9 +738,9 @@ function validateIndex(
   return issues;
 }
 
-function validateLog(content: string, settings: OkfSettings): OkfIssue[] {
+/** §11 rule 3 for the other reserved file: `log.md` follows §9 when present. */
+function validateLog(content: string): OkfIssue[] {
   const issues: OkfIssue[] = [];
-  if (!settings.checkReservedFiles) return issues;
 
   const { hasFm } = splitFrontmatter(content);
   if (hasFm) {

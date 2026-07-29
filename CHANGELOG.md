@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Index generation follows [#8](https://github.com/MartinForReal/okf-enforcer/issues/8):
 listings describe what they link to, and generation no longer destroys what you
 wrote. §8 makes `index.md` optional and §11 forbids failing a bundle for a
-missing one, so an index is validated when present and created only on request.
+missing one, so a folder without an index gets one generated rather than
+flagged, and an index that exists is validated against §8.
 
 ### Added
 - **Entry descriptions** — a concept's entry in a generated `index.md` now
@@ -27,11 +28,6 @@ missing one, so an index is validated when present and created only on request.
   the index is regenerated, so it survives a refresh even with overwrite on. (#8)
 
 ### Changed
-- **Auto-generation never creates an index.** With **Auto-generate index.md** on,
-  editing a note refreshes its folder's listing only if that folder already keeps
-  an `index.md`. Index files are optional (§8) and a missing one can't fail a
-  bundle (§11), so the plugin no longer materializes one in every folder you
-  touch; the generate commands still create them on request.
 - Subdirectory entries in a generated `index.md` now link to the folder's
   `index.md` when it has one, instead of a bare `folder/` path — clicking that
   path in Obsidian's default settings created a new, empty note. (#8)
@@ -45,6 +41,13 @@ missing one, so an index is validated when present and created only on request.
   it visited.
 - The default `generated.by` actor is now `okf-enforcer/0.4`. Existing vaults keep
   the actor already saved in their settings.
+
+### Removed
+- **Check reserved files** setting. `index.md` / `log.md` structure is now always
+  validated: §11 rule 3 ("every reserved filename follows the structure in §8 and
+  §9 respectively when present") is one of the three requirements for a conformant
+  bundle, so it isn't something to switch off. The check still only judges a file
+  that exists — a missing `index.md` is generated, never reported.
 
 ### Fixed
 - The community-store entry description said "OKF v0.1"; the plugin has targeted

@@ -286,7 +286,7 @@ export default class OkfPlugin extends Plugin {
       for (const path of folders) {
         const folder = this.app.vault.getAbstractFileByPath(path);
         if (folder instanceof TFolder) {
-          await this.generateIndexForFolder(folder, false, false);
+          await this.generateIndexForFolder(folder, false);
         }
       }
     },
@@ -574,8 +574,7 @@ export default class OkfPlugin extends Plugin {
   /** Writes the folder's index.md; returns whether the file changed on disk. */
   async generateIndexForFolder(
     folder: TFolder,
-    notify = true,
-    createMissing = true
+    notify = true
   ): Promise<boolean> {
     if (!folder) {
       if (notify) new Notice("OKF: no folder for the active note.");
@@ -586,13 +585,10 @@ export default class OkfPlugin extends Plugin {
         ? "index.md"
         : `${folder.path}/index.md`;
     const existing = this.app.vault.getAbstractFileByPath(indexPath);
-    // §8 makes index.md optional and §11 forbids rejecting a bundle for a
-    // missing one, so nothing here is owed an index. The automatic path passes
-    // createMissing: false and only refreshes folders that already keep one;
-    // creating a new index is left to the explicit commands.
-    if (!(existing instanceof TFile) && !createMissing) return false;
-    // Non-destructive mode: an index that already exists — along with whatever
-    // was hand-written into it — is left alone; only missing ones are created.
+    // A missing index.md is generated — §8 lets a producer do that, and §11
+    // never faults a bundle for one being absent. An index that already exists
+    // is checked by the validator instead of being clobbered here, when
+    // "Overwrite existing index.md" is off.
     if (existing instanceof TFile && !this.settings.overwriteExistingIndex) {
       if (notify) {
         new Notice(
@@ -889,7 +885,7 @@ class OkfSettingTab extends PluginSettingTab {
       },
       {
         name: "Auto-generate index.md",
-        desc: "Refresh a folder's index.md (§8 listing) automatically when its notes change. Only folders that already have an index.md are refreshed — §8 makes index files optional, so this never creates one. Use the generate commands to add an index to a folder.",
+        desc: "Keep a folder's index.md (§8 listing) up to date when its notes change. A folder without one gets it generated; an existing index is rewritten only if \"Overwrite existing index.md\" is on, and is validated either way.",
         control: (row) =>
           row.addToggle((tg) =>
             tg.setValue(s.autoGenerateIndex).onChange((v) => {
@@ -986,17 +982,6 @@ class OkfSettingTab extends PluginSettingTab {
           row.addToggle((tg) =>
             tg.setValue(s.warnTagsField).onChange((v) => {
               s.warnTagsField = v;
-              save();
-            })
-          ),
-      },
-      {
-        name: "Check reserved files (index.md / log.md)",
-        desc: "Validate §6 and §7 structure.",
-        control: (row) =>
-          row.addToggle((tg) =>
-            tg.setValue(s.checkReservedFiles).onChange((v) => {
-              s.checkReservedFiles = v;
               save();
             })
           ),
