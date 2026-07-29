@@ -78,10 +78,11 @@ export interface OkfSettings extends PortentSettings {
   fixOnSave: boolean;
   autoGenerateIndex: boolean;
   /**
-   * Overwrite an existing `index.md` when generating (§8). On by default —
-   * generate/refresh rewrites the listing from the folder's contents. Turn it
-   * off to make generation additive: a missing `index.md` is still created, but
-   * an existing one — and any prose written into it — is never touched.
+   * Rebuild an existing `index.md` from scratch instead of adding to it (§8).
+   * Off by default: generation appends the entries a listing is missing and
+   * leaves prose, ordering, and hand-edited descriptions alone. On, the listing
+   * is rewritten from the folder's contents, which also drops entries for notes
+   * that are gone.
    */
   overwriteExistingIndex: boolean;
   /**
@@ -114,7 +115,7 @@ export const DEFAULT_SETTINGS: OkfSettings = {
   scanOnStartup: true,
   fixOnSave: true,
   autoGenerateIndex: true,
-  overwriteExistingIndex: true,
+  overwriteExistingIndex: false,
   indexSubdirDescSection: "",
   autoMigrateOnFix: true,
   batchSize: 50,
@@ -253,6 +254,129 @@ export function sectionBlock(content: string, section: string): string {
   let end = start + 1;
   while (end < lines.length && !/^#{1,6}\s+\S/.test(lines[end])) end++;
   return lines.slice(start, end).join("\n").trim();
+}
+
+/** One entry of a §8 listing. */
+export interface IndexEntry {
+  /** Heading it belongs under, e.g. `Concepts`. */
+  section: string;
+  /** Relative link target, URI-encoded as it should be written. */
+  link: string;
+  title: string;
+  desc: string;
+}
+
+/** The §8 entry shape: `* [Title](link) - description`. */
+export function renderEntry(e: IndexEntry): string {
+  return `* [${e.title}](${e.link})${e.desc ? ` - ${e.desc}` : ""}`;
+}
+
+const BULLET_RE = /^\s*[*\-+]\s+\S/;
+const BULLET_LINK_RE = /^\s*[*\-+]\s+\[[^\]]*\]\(\s*([^)\s]+)/;
+const PLACEHOLDER_RE = /^\s*_No .+ yet\._\s*$/;
+
+/**
+ * A link reduced to what identifies the thing it points at, so a folder listed
+ * as `notes/` and the same folder rendered as `notes/index.md` are recognized
+ * as one entry rather than appended twice.
+ */
+function linkKey(link: string): string {
+  let t = link.trim().replace(/^\.\//, "");
+  try {
+    t = decodeURI(t);
+  } catch {
+    // A malformed escape is compared as written rather than dropped.
+  }
+  return t
+    .replace(/\/index\.md$/i, "")
+    .replace(/\/+$/, "")
+    .toLowerCase();
+}
+
+/** The full listing for a folder, replacing whatever the index held before. */
+export function renderIndex(entries: IndexEntry[], keep = ""): string {
+  let out = keep ? `${keep}\n\n` : "";
+  let section = "";
+  for (const e of entries) {
+    if (e.section !== section) {
+      if (section) out += "\n";
+      section = e.section;
+      out += `# ${section}\n\n`;
+    }
+    out += `${renderEntry(e)}\n`;
+  }
+  return out;
+}
+
+/**
+ * Adds the entries an index doesn't list yet, under their section headings, and
+ * leaves everything else exactly as written — prose, ordering, hand-edited
+ * descriptions, and sections this plugin knows nothing about. Returns `existing`
+ * unchanged when there is nothing new to add, so no write is needed.
+ */
+export function mergeIndex(existing: string, entries: IndexEntry[]): string {
+  const { body } = splitFrontmatter(existing);
+  const prefix = existing.slice(0, existing.length - body.length);
+  const eol = existing.includes("\r\n") ? "\r\n" : "\n";
+  const lines = body.split(/\r?\n/);
+
+  const listed = new Set<string>();
+  for (const line of lines) {
+    const m = line.match(BULLET_LINK_RE);
+    if (m) listed.add(linkKey(m[1]));
+  }
+  const missing = entries.filter((e) => !listed.has(linkKey(e.link)));
+  if (missing.length === 0) return existing;
+
+  const sections: string[] = [];
+  for (const e of missing) {
+    if (!sections.includes(e.section)) sections.push(e.section);
+  }
+  for (const section of sections) {
+    appendToSection(
+      lines,
+      section,
+      missing.filter((e) => e.section === section).map(renderEntry)
+    );
+  }
+
+  while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+  return prefix + lines.join(eol) + eol;
+}
+
+/** Appends `items` to the end of `section`'s list, creating the section if absent. */
+function appendToSection(
+  lines: string[],
+  section: string,
+  items: string[]
+): void {
+  const start = headingIndex(lines, section);
+  if (start < 0) {
+    while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+    if (lines.length) lines.push("");
+    lines.push(`# ${section}`, "", ...items);
+    return;
+  }
+
+  let end = start + 1;
+  while (end < lines.length && !/^#{1,6}\s+\S/.test(lines[end])) end++;
+  // A placeholder left by an earlier empty listing gives way to real entries.
+  for (let i = end - 1; i > start; i--) {
+    if (PLACEHOLDER_RE.test(lines[i])) {
+      lines.splice(i, 1);
+      end--;
+    }
+  }
+
+  let at = -1;
+  for (let i = start + 1; i < end; i++) if (BULLET_RE.test(lines[i])) at = i + 1;
+  if (at < 0) {
+    // No list yet: start one below the heading and any prose under it.
+    at = end;
+    while (at > start + 1 && !lines[at - 1].trim()) at--;
+    items = ["", ...items];
+  }
+  lines.splice(at, 0, ...items);
 }
 
 export function validateContent(

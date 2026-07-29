@@ -22,6 +22,9 @@ import {
   oneLine,
   sectionBlock,
   sectionSummary,
+  mergeIndex,
+  renderIndex,
+  type IndexEntry,
   OkfIssue,
   OKF_VERSION,
 } from "./validator";
@@ -585,22 +588,9 @@ export default class OkfPlugin extends Plugin {
         ? "index.md"
         : `${folder.path}/index.md`;
     const existing = this.app.vault.getAbstractFileByPath(indexPath);
-    // A missing index.md is generated — §8 lets a producer do that, and §11
-    // never faults a bundle for one being absent. An index that already exists
-    // is checked by the validator instead of being clobbered here, when
-    // "Overwrite existing index.md" is off.
-    if (existing instanceof TFile && !this.settings.overwriteExistingIndex) {
-      if (notify) {
-        new Notice(
-          `OKF: kept existing ${indexPath} ("Overwrite existing index.md" is off).`
-        );
-      }
-      return false;
-    }
-
-    // A folder describes itself to its parent through a section of its own
-    // index.md, so a rewrite has to carry that section over — otherwise the
-    // refresh that reads the description is the same one that deletes it.
+    // A rewrite has to carry over the section a folder uses to describe itself
+    // to its parent — otherwise the refresh that reads the description is the
+    // same one that deletes it.
     const current =
       existing instanceof TFile ? await this.app.vault.read(existing) : null;
     const kept =
@@ -609,8 +599,8 @@ export default class OkfPlugin extends Plugin {
         : sectionBlock(current, this.settings.indexSubdirDescSection);
 
     const children = folder.children;
-    const concepts: { link: string; title: string; desc: string }[] = [];
-    const subdirs: { link: string; name: string; desc: string }[] = [];
+    const concepts: IndexEntry[] = [];
+    const subdirs: IndexEntry[] = [];
 
     for (const child of children) {
       if (child instanceof TFile) {
@@ -625,7 +615,12 @@ export default class OkfPlugin extends Plugin {
             ? fmTitle
             : basename(child.path);
         const desc = typeof fmDesc === "string" ? oneLine(fmDesc) : "";
-        concepts.push({ link: encodeURI(child.name), title, desc });
+        concepts.push({
+          section: "Concepts",
+          link: encodeURI(child.name),
+          title,
+          desc,
+        });
       } else if (child instanceof TFolder) {
         // Link at the subfolder's index.md when it has one: a bare `folder/`
         // link resolves to a note that doesn't exist, so clicking it creates a
@@ -635,31 +630,39 @@ export default class OkfPlugin extends Plugin {
         );
         const hasIndex = childIndex instanceof TFile;
         subdirs.push({
+          section: "Subdirectories",
           link: encodeURI(child.name) + (hasIndex ? "/index.md" : "/"),
-          name: child.name,
+          title: child.name,
           desc: hasIndex ? await this.folderDescription(childIndex) : "",
         });
       }
     }
 
-    let out = kept ? `${kept}\n\n` : "";
-    if (subdirs.length) {
-      out += "# Subdirectories\n\n";
-      for (const s of subdirs) {
-        out += `* [${s.name}](${s.link})${s.desc ? " - " + s.desc : ""}\n`;
+    const entries = [...subdirs, ...concepts];
+    // §8: an index enumerates the directory's contents. A directory holding
+    // nothing has no listing to write, so it gets no index rather than a stub
+    // that says so — and an index left behind by a folder since emptied is not
+    // blanked out.
+    if (entries.length === 0) {
+      if (notify) {
+        new Notice(
+          `OKF: nothing to list in ${folder.path || "/"}; left index.md alone.`
+        );
       }
-      out += "\n";
-    }
-    out += "# Concepts\n\n";
-    if (concepts.length === 0) out += "_No concepts yet._\n";
-    for (const c of concepts) {
-      out += `* [${c.title}](${c.link})${c.desc ? " - " + c.desc : ""}\n`;
+      return false;
     }
 
-    // The bundle-root index.md is the only place `okf_version` frontmatter is
-    // allowed (§8, §12); non-root indexes stay frontmatter-free.
-    if (indexPath === "index.md") {
-      out = `---\nokf_version: "${OKF_VERSION}"\n---\n\n${out}`;
+    let out: string;
+    if (current !== null && !this.settings.overwriteExistingIndex) {
+      // Additive: append what the listing is missing and touch nothing else.
+      out = mergeIndex(current, entries);
+    } else {
+      out = renderIndex(entries, kept);
+      // The bundle-root index.md is the only place `okf_version` frontmatter is
+      // allowed (§8, §12); non-root indexes stay frontmatter-free.
+      if (indexPath === "index.md") {
+        out = `---\nokf_version: "${OKF_VERSION}"\n---\n\n${out}`;
+      }
     }
     if (existing instanceof TFile) {
       if (current === out) return false;
@@ -885,7 +888,7 @@ class OkfSettingTab extends PluginSettingTab {
       },
       {
         name: "Auto-generate index.md",
-        desc: "Keep a folder's index.md (§8 listing) up to date when its notes change. A folder without one gets it generated; an existing index is rewritten only if \"Overwrite existing index.md\" is on, and is validated either way.",
+        desc: "Keep a folder's index.md (§8 listing) up to date when its notes change. A folder with something to list gets an index generated; an existing one has missing entries added, or is rebuilt if \"Rebuild existing index.md\" is on.",
         control: (row) =>
           row.addToggle((tg) =>
             tg.setValue(s.autoGenerateIndex).onChange((v) => {
@@ -895,8 +898,8 @@ class OkfSettingTab extends PluginSettingTab {
           ),
       },
       {
-        name: "Overwrite existing index.md",
-        desc: "On: generating an index rewrites the folder's existing index.md from its contents. Off: an existing index.md — and anything you wrote into it — is left untouched, and only missing ones are created.",
+        name: "Rebuild existing index.md",
+        desc: "Off (default): generating an index adds only the entries it doesn't already list, leaving your prose, ordering, and edited descriptions untouched. On: the listing is rewritten from the folder's contents, which also drops entries for notes that no longer exist.",
         control: (row) =>
           row.addToggle((tg) =>
             tg.setValue(s.overwriteExistingIndex).onChange((v) => {

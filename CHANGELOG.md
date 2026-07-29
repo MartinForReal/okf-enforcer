@@ -8,26 +8,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Index generation follows [#8](https://github.com/MartinForReal/okf-enforcer/issues/8):
 listings describe what they link to, and generation no longer destroys what you
-wrote. §8 makes `index.md` optional and §11 forbids failing a bundle for a
-missing one, so a folder without an index gets one generated rather than
-flagged, and an index that exists is validated against §8.
+wrote — it adds to an existing index rather than replacing it. §8 makes
+`index.md` optional and §11 forbids failing a bundle for a missing one, so a
+folder with something to list gets an index generated rather than flagged, and
+one that exists is validated against §8.
 
 ### Added
 - **Entry descriptions** — a concept's entry in a generated `index.md` now
   carries its frontmatter `description`, which §8 recommends ("Entries SHOULD
   include the description from the linked concept's frontmatter"). (#8)
-- **Non-destructive index generation** — new **Overwrite existing index.md**
-  setting (on by default, matching previous behavior). Turn it off and index
-  generation becomes additive: a folder missing `index.md` still gets one, but an
-  existing index — and any prose hand-written into it — is left untouched. (#8)
+- **Additive index generation** — generating over an existing `index.md` now
+  appends only the entries it doesn't already list, leaving prose, ordering,
+  section structure, and hand-edited descriptions exactly as written. A folder is
+  matched whether its entry was written as `sub/` or `sub/index.md`, so nothing
+  is listed twice, and a `_No concepts yet._` placeholder gives way to real
+  entries. The new **Rebuild existing index.md** setting (off by default)
+  restores rewrite-from-scratch, which also prunes entries for notes that are
+  gone. (#8)
 - **Subdirectory descriptions** — new **Subdirectory description section**
   setting names a heading in a subfolder's `index.md` (e.g. `Purpose`) whose
   first paragraph becomes that folder's description in the parent listing. Blank
   by default. Non-root indexes carry no frontmatter (§8), so a body section is
-  the only place a folder can describe itself. That section is preserved when
-  the index is regenerated, so it survives a refresh even with overwrite on. (#8)
+  the only place a folder can describe itself. Additive generation never touches
+  the section, and a rebuild carries it over, so it survives a refresh. (#8)
 
 ### Changed
+- **An empty folder no longer gets an `index.md`.** §8's listing enumerates a
+  directory's contents, so with nothing to enumerate the plugin writes nothing
+  rather than a `_No concepts yet._` stub — a stub its own §8 check then flagged
+  for listing no entries. An index left behind by a folder since emptied is kept
+  as it is rather than blanked.
 - Subdirectory entries in a generated `index.md` now link to the folder's
   `index.md` when it has one, instead of a bare `folder/` path — clicking that
   path in Obsidian's default settings created a new, empty note. (#8)
