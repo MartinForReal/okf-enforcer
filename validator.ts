@@ -272,7 +272,9 @@ export function renderEntry(e: IndexEntry): string {
 }
 
 const BULLET_RE = /^\s*[*\-+]\s+\S/;
-const BULLET_LINK_RE = /^\s*[*\-+]\s+\[[^\]]*\]\(\s*([^)\s]+)/;
+// The destination runs to the closing paren, not to the first space: a
+// hand-written entry may link at `my notes/` with the space left unescaped.
+const BULLET_LINK_RE = /^\s*[*\-+]\s+\[[^\]]*\]\(([^)]*)\)/;
 const PLACEHOLDER_RE = /^\s*_No .+ yet\._\s*$/;
 
 /**
@@ -281,7 +283,12 @@ const PLACEHOLDER_RE = /^\s*_No .+ yet\._\s*$/;
  * as one entry rather than appended twice.
  */
 function linkKey(link: string): string {
-  let t = link.trim().replace(/^\.\//, "");
+  let t = link.trim();
+  // Neither an angle-bracket wrapper nor a trailing title is part of the
+  // destination.
+  const angled = t.match(/^<([^>]*)>/);
+  t = (angled ? angled[1] : t.replace(/\s+["'(].*$/, "")).trim();
+  t = t.replace(/^\.\//, "");
   try {
     t = decodeURI(t);
   } catch {

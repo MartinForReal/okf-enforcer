@@ -622,18 +622,21 @@ export default class OkfPlugin extends Plugin {
           desc,
         });
       } else if (child instanceof TFolder) {
-        // Link at the subfolder's index.md when it has one: a bare `folder/`
-        // link resolves to a note that doesn't exist, so clicking it creates a
-        // stray file in the vault.
+        // A subdirectory's document is its own index.md, so that is what the
+        // entry links at. A bare `folder/` link resolves to a note that doesn't
+        // exist, and clicking it creates a stray file in the vault.
+        if (!this.folderIsListable(child)) continue;
         const childIndex = this.app.vault.getAbstractFileByPath(
           `${child.path}/index.md`
         );
-        const hasIndex = childIndex instanceof TFile;
         subdirs.push({
           section: "Subdirectories",
-          link: encodeURI(child.name) + (hasIndex ? "/index.md" : "/"),
+          link: `${encodeURI(child.name)}/index.md`,
           title: child.name,
-          desc: hasIndex ? await this.folderDescription(childIndex) : "",
+          desc:
+            childIndex instanceof TFile
+              ? await this.folderDescription(childIndex)
+              : "",
         });
       }
     }
@@ -686,6 +689,27 @@ export default class OkfPlugin extends Plugin {
     const section = this.settings.indexSubdirDescSection.trim();
     if (!section) return "";
     return sectionSummary(await this.app.vault.cachedRead(index), section);
+  }
+
+  /**
+   * Whether a subdirectory is worth an entry: it already has an `index.md`, or
+   * it holds something an index would list, so the `sub/index.md` the parent
+   * links at either exists or appears as soon as that folder is generated. A
+   * folder with neither is left out rather than pointed at a file that will
+   * never be written.
+   */
+  private folderIsListable(folder: TFolder): boolean {
+    for (const child of folder.children) {
+      if (child instanceof TFile) {
+        if (child.extension !== "md") continue;
+        // An index.md counts — the folder already documents itself. A lone
+        // log.md doesn't; a changelog with nothing to change isn't a listing.
+        if (isReserved(child.path) !== "log") return true;
+      } else if (child instanceof TFolder && this.folderIsListable(child)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   async generateAllIndexes() {

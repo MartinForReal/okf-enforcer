@@ -38,9 +38,12 @@ one that exists is validated against §8.
   rather than a `_No concepts yet._` stub — a stub its own §8 check then flagged
   for listing no entries. An index left behind by a folder since emptied is kept
   as it is rather than blanked.
-- Subdirectory entries in a generated `index.md` now link to the folder's
-  `index.md` when it has one, instead of a bare `folder/` path — clicking that
-  path in Obsidian's default settings created a new, empty note. (#8)
+- Subdirectory entries in a generated `index.md` now link to that folder's own
+  `index.md` rather than a bare `folder/` path — clicking the bare path in
+  Obsidian's default settings created a new, empty note. A subfolder is listed
+  only when it has an index or holds something an index would list, so the link
+  points at a file that exists or is about to; a folder with neither is left out
+  rather than linked at an index that will never be written. (#8)
 - "Generate/refresh index.md for ALL folders" now processes deepest folders
   first, so each parent listing sees its children's freshly written indexes.
 - Descriptions in generated listings are collapsed to a single line and clipped

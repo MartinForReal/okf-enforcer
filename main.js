@@ -249,10 +249,13 @@ function renderEntry(e) {
   return `* [${e.title}](${e.link})${e.desc ? ` - ${e.desc}` : ""}`;
 }
 var BULLET_RE = /^\s*[*\-+]\s+\S/;
-var BULLET_LINK_RE = /^\s*[*\-+]\s+\[[^\]]*\]\(\s*([^)\s]+)/;
+var BULLET_LINK_RE = /^\s*[*\-+]\s+\[[^\]]*\]\(([^)]*)\)/;
 var PLACEHOLDER_RE = /^\s*_No .+ yet\._\s*$/;
 function linkKey(link) {
-  let t = link.trim().replace(/^\.\//, "");
+  let t = link.trim();
+  const angled = t.match(/^<([^>]*)>/);
+  t = (angled ? angled[1] : t.replace(/\s+["'(].*$/, "")).trim();
+  t = t.replace(/^\.\//, "");
   try {
     t = decodeURI(t);
   } catch (e) {
@@ -1519,15 +1522,15 @@ Click to open the report`
           desc
         });
       } else if (child instanceof import_obsidian3.TFolder) {
+        if (!this.folderIsListable(child)) continue;
         const childIndex = this.app.vault.getAbstractFileByPath(
           `${child.path}/index.md`
         );
-        const hasIndex = childIndex instanceof import_obsidian3.TFile;
         subdirs.push({
           section: "Subdirectories",
-          link: encodeURI(child.name) + (hasIndex ? "/index.md" : "/"),
+          link: `${encodeURI(child.name)}/index.md`,
           title: child.name,
-          desc: hasIndex ? await this.folderDescription(childIndex) : ""
+          desc: childIndex instanceof import_obsidian3.TFile ? await this.folderDescription(childIndex) : ""
         });
       }
     }
@@ -1574,6 +1577,24 @@ ${out}`;
     const section = this.settings.indexSubdirDescSection.trim();
     if (!section) return "";
     return sectionSummary(await this.app.vault.cachedRead(index), section);
+  }
+  /**
+   * Whether a subdirectory is worth an entry: it already has an `index.md`, or
+   * it holds something an index would list, so the `sub/index.md` the parent
+   * links at either exists or appears as soon as that folder is generated. A
+   * folder with neither is left out rather than pointed at a file that will
+   * never be written.
+   */
+  folderIsListable(folder) {
+    for (const child of folder.children) {
+      if (child instanceof import_obsidian3.TFile) {
+        if (child.extension !== "md") continue;
+        if (isReserved(child.path) !== "log") return true;
+      } else if (child instanceof import_obsidian3.TFolder && this.folderIsListable(child)) {
+        return true;
+      }
+    }
+    return false;
   }
   async generateAllIndexes() {
     if (this.busy) {
