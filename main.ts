@@ -219,11 +219,26 @@ export default class OkfPlugin extends Plugin {
       this.layoutReady = true;
       // The panel is hidden by default simply because we never auto-open it;
       // we do not detach existing leaves, so a user-positioned view is preserved.
-      if (this.settings.scanOnStartup) {
-        // Silent: update the status bar/tooltip only, never open the panel.
-        window.setTimeout(() => { void this.scanVault(false, true); }, 1500);
-      }
+      window.setTimeout(() => { void this.startupPass(); }, 1500);
     });
+  }
+
+  /**
+   * The startup work, once the workspace has settled: bring the indexes up to
+   * date, then scan. Both are opt-out/opt-in toggles, and either may be off.
+   *
+   * Indexes go first because a scan validates `index.md` against §8, and a
+   * stale listing the pass is about to rewrite shouldn't be reported as a
+   * finding the user then has to look at. They run one after the other rather
+   * than together because each takes `this.busy` for the duration, so
+   * overlapping them would mean one silently doing nothing.
+   */
+  private async startupPass(): Promise<void> {
+    if (this.settings.autoGenerateIndex && this.settings.generateIndexOnStartup) {
+      await this.generateAllIndexes(true);
+    }
+    // Silent: update the status bar/tooltip only, never open the panel.
+    if (this.settings.scanOnStartup) await this.scanVault(false, true);
   }
 
   onunload() {
@@ -849,9 +864,9 @@ export default class OkfPlugin extends Plugin {
     return false;
   }
 
-  async generateAllIndexes() {
+  async generateAllIndexes(silent = false) {
     if (this.busy) {
-      new Notice("OKF: a scan/fix is already running…");
+      if (!silent) new Notice("OKF: a scan/fix is already running…");
       return;
     }
     this.busy = true;
@@ -880,9 +895,14 @@ export default class OkfPlugin extends Plugin {
         },
         "OKF: building indexes"
       );
-      new Notice(
-        `OKF: updated index.md in ${written} of ${list.length} folder(s).`
-      );
+      // A silent pass still reports through the progress bar while it runs —
+      // unlike a scan, this writes to the vault, and that shouldn't happen with
+      // no sign of it — but it doesn't interrupt with a notice at the end.
+      if (!silent) {
+        new Notice(
+          `OKF: updated index.md in ${written} of ${list.length} folder(s).`
+        );
+      }
     } finally {
       this.busy = false;
     }
@@ -1060,6 +1080,17 @@ class OkfSettingTab extends PluginSettingTab {
           row.addToggle((tg) =>
             tg.setValue(s.autoGenerateIndex).onChange((v) => {
               s.autoGenerateIndex = v;
+              save();
+            })
+          ),
+      },
+      {
+        name: "Generate index.md on startup",
+        desc: "Off (default): the hook above keeps listings current while the plugin is running, so nothing needs rebuilding at load. On: every folder's index.md is brought up to date once when the plugin loads, before the startup scan — for what changed while Obsidian was closed, such as a vault synced from another machine or edited outside it. Needs \"Auto-generate index.md\" on. Runs quietly: progress shows in the status bar, and no notice is raised when it finishes.",
+        control: (row) =>
+          row.addToggle((tg) =>
+            tg.setValue(s.generateIndexOnStartup).onChange((v) => {
+              s.generateIndexOnStartup = v;
               save();
             })
           ),

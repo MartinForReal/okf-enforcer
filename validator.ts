@@ -78,6 +78,15 @@ export interface OkfSettings extends PortentSettings {
   fixOnSave: boolean;
   autoGenerateIndex: boolean;
   /**
+   * Bring every folder's `index.md` up to date once, when the plugin loads.
+   * Off by default: the on-create/rename/delete hooks already keep listings
+   * current while the plugin is running, so this is for what changed while it
+   * wasn't — a vault synced from another machine, or edited outside Obsidian —
+   * and it writes across the whole vault, which is not something to do to
+   * someone's notes unasked.
+   */
+  generateIndexOnStartup: boolean;
+  /**
    * Rebuild an existing `index.md` from scratch instead of adding to it (§8).
    * Off by default: generation appends the entries a listing is missing and
    * leaves prose, ordering, and hand-edited descriptions alone. On, the listing
@@ -115,6 +124,7 @@ export const DEFAULT_SETTINGS: OkfSettings = {
   scanOnStartup: true,
   fixOnSave: true,
   autoGenerateIndex: true,
+  generateIndexOnStartup: false,
   overwriteExistingIndex: false,
   indexSubdirDescSection: "",
   autoMigrateOnFix: true,

@@ -47,6 +47,15 @@ exists is validated against §8.
   by default. Non-root indexes carry no frontmatter (§8), so a body section is
   the only place a folder can describe itself. Additive generation never touches
   the section, and a rebuild carries it over, so it survives a refresh. (#8)
+- **Generate index.md on startup** — new setting, off by default, that brings
+  every folder's `index.md` up to date once when the plugin loads. The existing
+  create/rename/delete hooks only see what happens while the plugin is running,
+  so this is for what changed while it wasn't: a vault synced from another
+  machine, or edited outside Obsidian. It runs before the startup scan, so the
+  scan judges the listings as they now stand rather than the ones it is about to
+  replace, and it runs quietly — progress in the status bar, no notice at the
+  end. Off by default because it writes across the whole vault, which is not
+  something to do to someone's notes unasked. (#8)
 
 ### Changed
 - **Entries are grouped by their `type`.** A generated listing files each note
