@@ -25,6 +25,8 @@ import {
   sectionSummary,
   mergeIndex,
   renderIndex,
+  sectionForType,
+  INDEX_SECTIONS,
   type IndexEntry,
   OkfIssue,
   OKF_VERSION,
@@ -661,13 +663,29 @@ export default class OkfPlugin extends Plugin {
         : sectionBlock(current, this.settings.indexSubdirDescSection);
 
     const children = folder.children;
-    const concepts: IndexEntry[] = [];
+    // Notes are grouped by their `type`, so the listing says what the directory
+    // holds. Keyed by the heading rather than the raw type, which folds
+    // `concept` and `Concept` into one section.
+    const byType = new Map<string, IndexEntry[]>();
     const subdirs: IndexEntry[] = [];
+    const files: IndexEntry[] = [];
 
     for (const child of children) {
       if (child instanceof TFile) {
-        if (child.extension !== "md") continue;
         if (isReserved(child.path)) continue;
+        if (child.extension !== "md") {
+          // An attachment is part of what the directory holds, so §8 lists it —
+          // under its own heading, since it carries no frontmatter to be
+          // described or typed by. Without this a folder of nothing but images
+          // would render an index that claims the folder is empty.
+          files.push({
+            section: INDEX_SECTIONS.files,
+            link: encodeURI(child.name),
+            title: child.name,
+            desc: "",
+          });
+          continue;
+        }
         const fm: Record<string, unknown> =
           this.app.metadataCache.getFileCache(child)?.frontmatter ?? {};
         const fmTitle = fm["title"];
@@ -677,12 +695,16 @@ export default class OkfPlugin extends Plugin {
             ? fmTitle
             : basename(child.path);
         const desc = typeof fmDesc === "string" ? oneLine(fmDesc) : "";
-        concepts.push({
-          section: "Concepts",
+        const section = sectionForType(fm["type"]);
+        const bucket = byType.get(section);
+        const entry: IndexEntry = {
+          section,
           link: encodeURI(child.name),
           title,
           desc,
-        });
+        };
+        if (bucket) bucket.push(entry);
+        else byType.set(section, [entry]);
       } else if (child instanceof TFolder) {
         // A subdirectory's document is its own index.md, so that is what the
         // entry links at. A bare `folder/` link resolves to a note that doesn't
@@ -709,7 +731,7 @@ export default class OkfPlugin extends Plugin {
           );
         }
         subdirs.push({
-          section: "Subdirectories",
+          section: INDEX_SECTIONS.subdirs,
           link: `${encodeURI(child.name)}/index.md`,
           title: child.name,
           desc:
@@ -720,12 +742,34 @@ export default class OkfPlugin extends Plugin {
       }
     }
 
-    const entries = [...subdirs, ...concepts];
+    // Subdirectories first — they're the branches of the tree — then one
+    // section per type in alphabetical order, so the same folder renders the
+    // same way whatever order Obsidian happens to hand its children over in.
+    // What the plugin couldn't type, and what isn't a note at all, goes last.
+    const groups: [string, IndexEntry[]][] = [
+      [INDEX_SECTIONS.subdirs, subdirs],
+      ...[...byType.entries()]
+        .filter(([section]) => section !== INDEX_SECTIONS.untyped)
+        .sort(([a], [b]) => a.localeCompare(b)),
+      [INDEX_SECTIONS.untyped, byType.get(INDEX_SECTIONS.untyped) ?? []],
+      [INDEX_SECTIONS.files, files],
+    ];
+    // Two groups can land on one heading: `type: File` pluralises onto the same
+    // `Files` the attachments use, and `Note` and `note` differ only in case,
+    // which is how §8 headings are matched anyway. Folding them keeps a heading
+    // from being written twice, under the spelling that got there first.
+    const sections = new Map<string, IndexEntry[]>();
+    for (const [section, group] of groups) {
+      if (group.length === 0) continue;
+      const at = sections.get(section.toLowerCase());
+      if (!at) sections.set(section.toLowerCase(), [...group]);
+      else for (const e of group) at.push({ ...e, section: at[0].section });
+    }
+    const entries = [...sections.values()].flat();
     // §8 makes an index optional, but a folder that has one is navigable and a
     // folder that doesn't is a dead end in its parent's listing. So every
-    // folder gets one, including an empty and a newly created folder — the
-    // listing simply says it has nothing yet, and the placeholder gives way to
-    // the first real entry.
+    // folder gets one, including an empty and a newly created folder — there is
+    // simply nothing in it to list, and the first entry fills it in.
     const maintaining = current !== null && !this.settings.overwriteExistingIndex;
 
     let out: string;
@@ -1011,7 +1055,7 @@ class OkfSettingTab extends PluginSettingTab {
       },
       {
         name: "Auto-generate index.md",
-        desc: "Keep a folder's index.md (§8 listing) up to date as its notes are added, renamed, and deleted, along with every listing above it — a parent describes its subdirectories by what they hold. Every folder gets one, including an empty and a newly created folder, so no listing points at a file that isn't there; the config folder and anything under \"Excluded folders\" are left alone. An existing index has missing entries added, wrong links corrected, and entries for deleted notes removed, or is rebuilt if \"Rebuild existing index.md\" is on.",
+        desc: "Keep a folder's index.md (§8 listing) up to date as its notes are added, renamed, and deleted, along with every listing above it — a parent describes its subdirectories by what they hold. Entries are grouped by their `type` (Concepts, Metrics, …), a note with no type is listed under Untyped, and files that aren't notes under Files. Every folder gets an index, including an empty and a newly created folder — one with nothing to list is left empty — so no listing points at a file that isn't there; the config folder and anything under \"Excluded folders\" are left alone. An existing index has missing entries added, wrong links corrected, and entries for deleted notes removed, or is rebuilt if \"Rebuild existing index.md\" is on.",
         control: (row) =>
           row.addToggle((tg) =>
             tg.setValue(s.autoGenerateIndex).onChange((v) => {
@@ -1022,7 +1066,7 @@ class OkfSettingTab extends PluginSettingTab {
       },
       {
         name: "Rebuild existing index.md",
-        desc: "Off (default): generating an index adds the entries it doesn't already list, corrects a link that points at the wrong path, and drops one whose note this folder no longer holds, leaving your prose, ordering, titles, and edited descriptions untouched. On: the listing is rewritten from the folder's contents, which also refreshes every description and re-sorts the entries.",
+        desc: "Off (default): generating an index adds the entries it doesn't already list, corrects a link that points at the wrong path, and drops one whose note this folder no longer holds, leaving your prose, ordering, titles, and edited descriptions untouched. On: the listing is rewritten from the folder's contents, which also refreshes every description, re-sorts the entries, and re-groups them under their current `type`.",
         control: (row) =>
           row.addToggle((tg) =>
             tg.setValue(s.overwriteExistingIndex).onChange((v) => {

@@ -252,6 +252,38 @@ function sectionBlock(content, section) {
 function renderEntry(e) {
   return `* [${e.title}](${e.link})${e.desc ? ` - ${e.desc}` : ""}`;
 }
+var INDEX_SECTIONS = {
+  subdirs: "Subdirectories",
+  untyped: "Untyped",
+  files: "Files"
+};
+var IRREGULAR_PLURALS = {
+  person: "people",
+  child: "children"
+};
+function pluralize(word) {
+  const lower = word.toLowerCase();
+  const irregular = IRREGULAR_PLURALS[lower];
+  if (irregular) {
+    return word[0] === lower[0] ? irregular : irregular[0].toUpperCase() + irregular.slice(1);
+  }
+  if (/[a-z]{2}is$/i.test(word)) return word.slice(0, -2) + "es";
+  if (/[^su]s$/i.test(word)) return word;
+  if (/[^aeiou]y$/i.test(word)) return word.slice(0, -1) + "ies";
+  if (/(s|x|z|ch|sh)$/i.test(word)) return word + "es";
+  return word + "s";
+}
+function headingCase(word) {
+  return word === word.toLowerCase() ? word.charAt(0).toUpperCase() + word.slice(1) : word;
+}
+function sectionForType(type) {
+  if (typeof type !== "string") return INDEX_SECTIONS.untyped;
+  const t = oneLine(type, 80).replace(/^#+\s*/, "").trim();
+  if (!t) return INDEX_SECTIONS.untyped;
+  const words = t.split(/\s+/).map(headingCase);
+  words[words.length - 1] = pluralize(words[words.length - 1]);
+  return words.join(" ");
+}
 var BULLET_RE = /^\s*[*\-+]\s+\S/;
 var BULLET_LINK_RE = /^(\s*[*\-+]\s+\[[^\]]*\]\()([^)]*)\)/;
 var PLACEHOLDER_RE = /^\s*_No .+ yet\._\s*$/;
@@ -279,15 +311,11 @@ function linkKey(dest) {
   return decodePath(splitDest(dest).target).replace(/\/index\.md$/i, "").replace(/\/+$/, "").toLowerCase();
 }
 function renderIndex(entries, keep = "") {
+  if (entries.length === 0) return keep ? `${keep}
+` : "";
   let out = keep ? `${keep}
 
 ` : "";
-  if (entries.length === 0) {
-    return `${out}# Concepts
-
-_No concepts yet._
-`;
-  }
   let section = "";
   for (const e of entries) {
     if (e.section !== section) {
@@ -397,6 +425,7 @@ function mergeIndex(existing, entries, exists) {
   }
   if (!changed) return existing;
   while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+  if (lines.length === 0) return prefix;
   return prefix + lines.join(eol) + eol;
 }
 function appendToSection(lines, section, items) {
@@ -1634,7 +1663,7 @@ Click to open the report`
   }
   /** Writes the folder's index.md; returns whether the file changed on disk. */
   async generateIndexForFolder(folder, notify = true) {
-    var _a, _b;
+    var _a, _b, _c;
     if (!folder) {
       if (notify) new import_obsidian3.Notice("OKF: no folder for the active note.");
       return false;
@@ -1644,23 +1673,36 @@ Click to open the report`
     const current = existing instanceof import_obsidian3.TFile ? await this.app.vault.read(existing) : null;
     const kept = current === null ? "" : sectionBlock(current, this.settings.indexSubdirDescSection);
     const children = folder.children;
-    const concepts = [];
+    const byType = /* @__PURE__ */ new Map();
     const subdirs = [];
+    const files = [];
     for (const child of children) {
       if (child instanceof import_obsidian3.TFile) {
-        if (child.extension !== "md") continue;
         if (isReserved(child.path)) continue;
+        if (child.extension !== "md") {
+          files.push({
+            section: INDEX_SECTIONS.files,
+            link: encodeURI(child.name),
+            title: child.name,
+            desc: ""
+          });
+          continue;
+        }
         const fm = (_b = (_a = this.app.metadataCache.getFileCache(child)) == null ? void 0 : _a.frontmatter) != null ? _b : {};
         const fmTitle = fm["title"];
         const fmDesc = fm["description"];
         const title = typeof fmTitle === "string" && fmTitle.length > 0 ? fmTitle : basename(child.path);
         const desc = typeof fmDesc === "string" ? oneLine(fmDesc) : "";
-        concepts.push({
-          section: "Concepts",
+        const section = sectionForType(fm["type"]);
+        const bucket = byType.get(section);
+        const entry = {
+          section,
           link: encodeURI(child.name),
           title,
           desc
-        });
+        };
+        if (bucket) bucket.push(entry);
+        else byType.set(section, [entry]);
       } else if (child instanceof import_obsidian3.TFolder) {
         if (!this.folderIsIndexable(child)) continue;
         let childIndex = this.app.vault.getAbstractFileByPath(
@@ -1673,14 +1715,27 @@ Click to open the report`
           );
         }
         subdirs.push({
-          section: "Subdirectories",
+          section: INDEX_SECTIONS.subdirs,
           link: `${encodeURI(child.name)}/index.md`,
           title: child.name,
           desc: childIndex instanceof import_obsidian3.TFile ? await this.folderDescription(childIndex) : ""
         });
       }
     }
-    const entries = [...subdirs, ...concepts];
+    const groups = [
+      [INDEX_SECTIONS.subdirs, subdirs],
+      ...[...byType.entries()].filter(([section]) => section !== INDEX_SECTIONS.untyped).sort(([a], [b]) => a.localeCompare(b)),
+      [INDEX_SECTIONS.untyped, (_c = byType.get(INDEX_SECTIONS.untyped)) != null ? _c : []],
+      [INDEX_SECTIONS.files, files]
+    ];
+    const sections = /* @__PURE__ */ new Map();
+    for (const [section, group] of groups) {
+      if (group.length === 0) continue;
+      const at = sections.get(section.toLowerCase());
+      if (!at) sections.set(section.toLowerCase(), [...group]);
+      else for (const e of group) at.push({ ...e, section: at[0].section });
+    }
+    const entries = [...sections.values()].flat();
     const maintaining = current !== null && !this.settings.overwriteExistingIndex;
     let out;
     if (maintaining) {
@@ -1918,7 +1973,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       },
       {
         name: "Auto-generate index.md",
-        desc: `Keep a folder's index.md (\xA78 listing) up to date as its notes are added, renamed, and deleted, along with every listing above it \u2014 a parent describes its subdirectories by what they hold. Every folder gets one, including an empty and a newly created folder, so no listing points at a file that isn't there; the config folder and anything under "Excluded folders" are left alone. An existing index has missing entries added, wrong links corrected, and entries for deleted notes removed, or is rebuilt if "Rebuild existing index.md" is on.`,
+        desc: `Keep a folder's index.md (\xA78 listing) up to date as its notes are added, renamed, and deleted, along with every listing above it \u2014 a parent describes its subdirectories by what they hold. Entries are grouped by their \`type\` (Concepts, Metrics, \u2026), a note with no type is listed under Untyped, and files that aren't notes under Files. Every folder gets an index, including an empty and a newly created folder \u2014 one with nothing to list is left empty \u2014 so no listing points at a file that isn't there; the config folder and anything under "Excluded folders" are left alone. An existing index has missing entries added, wrong links corrected, and entries for deleted notes removed, or is rebuilt if "Rebuild existing index.md" is on.`,
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.autoGenerateIndex).onChange((v) => {
             s.autoGenerateIndex = v;
@@ -1928,7 +1983,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       },
       {
         name: "Rebuild existing index.md",
-        desc: "Off (default): generating an index adds the entries it doesn't already list, corrects a link that points at the wrong path, and drops one whose note this folder no longer holds, leaving your prose, ordering, titles, and edited descriptions untouched. On: the listing is rewritten from the folder's contents, which also refreshes every description and re-sorts the entries.",
+        desc: "Off (default): generating an index adds the entries it doesn't already list, corrects a link that points at the wrong path, and drops one whose note this folder no longer holds, leaving your prose, ordering, titles, and edited descriptions untouched. On: the listing is rewritten from the folder's contents, which also refreshes every description, re-sorts the entries, and re-groups them under their current `type`.",
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.overwriteExistingIndex).onChange((v) => {
             s.overwriteExistingIndex = v;

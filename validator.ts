@@ -281,6 +281,77 @@ export function renderEntry(e: IndexEntry): string {
   return `* [${e.title}](${e.link})${e.desc ? ` - ${e.desc}` : ""}`;
 }
 
+/**
+ * The §8 sections that no `type` names: subdirectories, notes whose `type` is
+ * missing or unusable (§11 reports those separately — the listing just doesn't
+ * pretend to know what they are), and files that aren't notes at all.
+ */
+export const INDEX_SECTIONS = {
+  subdirs: "Subdirectories",
+  untyped: "Untyped",
+  files: "Files",
+} as const;
+
+/** Plurals the suffix rules below get wrong. */
+const IRREGULAR_PLURALS: Record<string, string> = {
+  person: "people",
+  child: "children",
+};
+
+/** The plural of a single word, for use as a section heading. */
+function pluralize(word: string): string {
+  const lower = word.toLowerCase();
+  const irregular = IRREGULAR_PLURALS[lower];
+  if (irregular) {
+    // Keep whatever capitalisation the author used for the first letter.
+    return word[0] === lower[0]
+      ? irregular
+      : irregular[0].toUpperCase() + irregular.slice(1);
+  }
+  // `Analysis` → `Analyses`, not `Analysises`.
+  if (/[a-z]{2}is$/i.test(word)) return word.slice(0, -2) + "es";
+  // Already plural — `Notes` stays `Notes`. `Process`, `Status` and `Analysis`
+  // only look plural, so they're excluded and pluralised below.
+  if (/[^su]s$/i.test(word)) return word;
+  if (/[^aeiou]y$/i.test(word)) return word.slice(0, -1) + "ies";
+  if (/(s|x|z|ch|sh)$/i.test(word)) return word + "es";
+  return word + "s";
+}
+
+/**
+ * Capitalises a word written entirely in lower case, and leaves any other one
+ * alone: `wiki` heads a `Wikis` section, while `API` keeps its capitals rather
+ * than being flattened to `Api`.
+ */
+function headingCase(word: string): string {
+  return word === word.toLowerCase()
+    ? word.charAt(0).toUpperCase() + word.slice(1)
+    : word;
+}
+
+/**
+ * Section heading for the notes of one `type` — `Concept` → `Concepts`,
+ * `Attested Computation` → `Attested Computations`. Grouping by type is what
+ * makes a listing say what a directory holds rather than only that it holds
+ * something, which is the progressive disclosure §8 is after.
+ *
+ * Only the last word is pluralised. A heading is prose, so a lower-case `type`
+ * is capitalised for it, but a word the author already capitalised is left as
+ * written — an acronym stays an acronym. A type that is missing or says nothing
+ * usable gets the `Untyped` section rather than being silently filed under
+ * `Concepts`.
+ */
+export function sectionForType(type: unknown): string {
+  if (typeof type !== "string") return INDEX_SECTIONS.untyped;
+  // A heading is one line, so a `type` carrying newlines or its own `#` can't
+  // be pasted in raw.
+  const t = oneLine(type, 80).replace(/^#+\s*/, "").trim();
+  if (!t) return INDEX_SECTIONS.untyped;
+  const words = t.split(/\s+/).map(headingCase);
+  words[words.length - 1] = pluralize(words[words.length - 1]);
+  return words.join(" ");
+}
+
 const BULLET_RE = /^\s*[*\-+]\s+\S/;
 // Split so a destination can be replaced in place: everything up to the opening
 // paren, then the destination itself. It runs to the closing paren rather than
@@ -335,13 +406,12 @@ function linkKey(dest: string): string {
 
 /** The full listing for a folder, replacing whatever the index held before. */
 export function renderIndex(entries: IndexEntry[], keep = ""): string {
+  // A directory with nothing in it gets an empty index rather than a listing
+  // that describes emptiness: §8 asks an index to enumerate what a directory
+  // holds, and there is nothing to enumerate. The file is still written, so the
+  // entry naming it in the parent listing still points at something real.
+  if (entries.length === 0) return keep ? `${keep}\n` : "";
   let out = keep ? `${keep}\n\n` : "";
-  // A directory with nothing in it still gets a listing that says so, rather
-  // than no index at all. The placeholder is what a real entry replaces when
-  // the folder gains its first note (see `appendToSection`).
-  if (entries.length === 0) {
-    return `${out}# Concepts\n\n_No concepts yet._\n`;
-  }
   let section = "";
   for (const e of entries) {
     if (e.section !== section) {
@@ -495,6 +565,10 @@ export function mergeIndex(
   if (!changed) return existing;
 
   while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+  // Pruning can empty a listing outright, which is what a folder whose last
+  // note was deleted should end up with — the same empty index a rebuild would
+  // write, not a lone newline.
+  if (lines.length === 0) return prefix;
   return prefix + lines.join(eol) + eol;
 }
 
@@ -515,7 +589,8 @@ function appendToSection(
   let end = start + 1;
   while (end < lines.length && !/^#{1,6}\s+\S/.test(lines[end])) end++;
   const fenced = fencedLines(lines);
-  // A placeholder left by an earlier empty listing gives way to real entries.
+  // A placeholder left by a hand-written index, or by an earlier version of
+  // this plugin, gives way to real entries.
   for (let i = end - 1; i > start; i--) {
     if (!fenced[i] && PLACEHOLDER_RE.test(lines[i])) {
       lines.splice(i, 1);
@@ -1002,10 +1077,11 @@ function validateIndex(content: string, isRoot: boolean): OkfIssue[] {
   const hasHeading = /^#{1,6}\s+\S/m.test(body);
   const hasLinkBullet = /^\s*[*-]\s+\[[^\]]+\]\([^)]+\)/m.test(body);
   // An empty directory has nothing to enumerate, and §8 asks an index to
-  // enumerate what is there. A listing that holds only its headings and a
-  // `_No concepts yet._` placeholder is saying exactly that, so it isn't held
-  // to the guidance about listing contents — otherwise the index generated for
-  // a new folder would be reported the moment it was written.
+  // enumerate what is there. This plugin now leaves such an index empty, which
+  // the `body.trim()` guard below already passes; a listing holding only its
+  // headings and a `_No concepts yet._` placeholder is saying the same thing in
+  // words — written by hand, or by an earlier version of this plugin — and is
+  // let through on the same grounds.
   const saysEmpty = body
     .split(/\r?\n/)
     .every(
