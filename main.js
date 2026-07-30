@@ -282,6 +282,12 @@ function renderIndex(entries, keep = "") {
   let out = keep ? `${keep}
 
 ` : "";
+  if (entries.length === 0) {
+    return `${out}# Concepts
+
+_No concepts yet._
+`;
+  }
   let section = "";
   for (const e of entries) {
     if (e.section !== section) {
@@ -787,7 +793,10 @@ function validateIndex(content, isRoot) {
   const body = hasFm ? split.body : content;
   const hasHeading = /^#{1,6}\s+\S/m.test(body);
   const hasLinkBullet = /^\s*[*-]\s+\[[^\]]+\]\([^)]+\)/m.test(body);
-  if (body.trim().length > 0 && !hasLinkBullet) {
+  const saysEmpty = body.split(/\r?\n/).every(
+    (l) => !l.trim() || /^#{1,6}\s+\S/.test(l) || PLACEHOLDER_RE.test(l)
+  );
+  if (body.trim().length > 0 && !hasLinkBullet && !saysEmpty) {
     issues.push({
       severity: "warning",
       rule: "\xA78",
@@ -1121,7 +1130,7 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
         this.dirtyIndexFolders.clear();
         for (const path of folders) {
           const folder = path === "/" || path === "" ? this.app.vault.getRoot() : this.app.vault.getAbstractFileByPath(path);
-          if (folder instanceof import_obsidian3.TFolder) {
+          if (folder instanceof import_obsidian3.TFolder && this.folderIsIndexable(folder)) {
             await this.generateIndexForFolder(folder, false);
           }
         }
@@ -1241,6 +1250,10 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
     this.registerEvent(
       this.app.vault.on("create", (file) => {
         if (!this.layoutReady) return;
+        if (file instanceof import_obsidian3.TFolder) {
+          this.markIndexDirty(file.path);
+          return;
+        }
         if (file instanceof import_obsidian3.TFile && file.extension === "md") {
           if (this.selfWrites.has(file.path)) {
             this.selfWrites.delete(file.path);
@@ -1649,7 +1662,7 @@ Click to open the report`
           desc
         });
       } else if (child instanceof import_obsidian3.TFolder) {
-        if (!this.folderIsListable(child)) continue;
+        if (!this.folderIsIndexable(child)) continue;
         let childIndex = this.app.vault.getAbstractFileByPath(
           `${child.path}/index.md`
         );
@@ -1669,14 +1682,6 @@ Click to open the report`
     }
     const entries = [...subdirs, ...concepts];
     const maintaining = current !== null && !this.settings.overwriteExistingIndex;
-    if (entries.length === 0 && !maintaining) {
-      if (notify) {
-        new import_obsidian3.Notice(
-          `OKF: nothing to list in ${folder.path || "/"}; left index.md alone.`
-        );
-      }
-      return false;
-    }
     let out;
     if (maintaining) {
       const base = folder.path === "/" || folder.path === "" ? "" : `${folder.path}/`;
@@ -1718,21 +1723,18 @@ ${out}`;
     return sectionSummary(await this.app.vault.cachedRead(index), section);
   }
   /**
-   * Whether a subdirectory is worth an entry: it already has an `index.md`, or
-   * it holds something an index would list, in which case generating the parent
-   * writes that index on the way past. A folder with neither is left out rather
-   * than pointed at a file that will never be written.
+   * Whether a folder is one this plugin writes an index for and lists in its
+   * parent. Every folder in the bundle qualifies — an empty one included, since
+   * a listing that says a directory is empty is more use than a directory that
+   * can't be reached — except the ones that aren't part of the bundle at all:
+   * Obsidian's own config folder and anything the user excluded.
    */
-  folderIsListable(folder) {
-    for (const child of folder.children) {
-      if (child instanceof import_obsidian3.TFile) {
-        if (child.extension !== "md") continue;
-        if (isReserved(child.path) !== "log") return true;
-      } else if (child instanceof import_obsidian3.TFolder && this.folderIsListable(child)) {
-        return true;
-      }
-    }
-    return false;
+  folderIsIndexable(folder) {
+    const path = folder.path;
+    if (path === "/" || path === "") return true;
+    const config = this.app.vault.configDir;
+    if (path === config || path.startsWith(config + "/")) return false;
+    return !isExcluded(path, this.settings);
   }
   /**
    * Whether any folder worth listing somewhere below this one still has no
@@ -1743,7 +1745,7 @@ ${out}`;
   indexesMissingBelow(folder) {
     for (const child of folder.children) {
       if (!(child instanceof import_obsidian3.TFolder)) continue;
-      if (!this.folderIsListable(child)) continue;
+      if (!this.folderIsIndexable(child)) continue;
       const has = this.app.vault.getAbstractFileByPath(`${child.path}/index.md`) instanceof import_obsidian3.TFile;
       if (!has || this.indexesMissingBelow(child)) return true;
     }
@@ -1756,13 +1758,16 @@ ${out}`;
     }
     this.busy = true;
     try {
-      const folders = /* @__PURE__ */ new Set();
-      for (const f of this.candidateFiles()) {
-        for (let p = f.parent; p; p = p.parent) folders.add(p);
-      }
-      const list = [...folders].sort(
-        (a, b) => folderDepth(b.path) - folderDepth(a.path)
-      );
+      const list = [];
+      const walk = (folder) => {
+        if (!this.folderIsIndexable(folder)) return;
+        list.push(folder);
+        for (const child of folder.children) {
+          if (child instanceof import_obsidian3.TFolder) walk(child);
+        }
+      };
+      walk(this.app.vault.getRoot());
+      list.sort((a, b) => folderDepth(b.path) - folderDepth(a.path));
       let written = 0;
       await this.processQueue(
         list,
@@ -1913,7 +1918,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       },
       {
         name: "Auto-generate index.md",
-        desc: `Keep a folder's index.md (\xA78 listing) up to date as its notes are added, renamed, and deleted, along with every listing above it \u2014 a parent describes its subdirectories by what they hold. Generating a folder also writes the indexes of the subfolders it links at, however deep, so a listing never points at a file that isn't there. A folder with something to list gets an index generated; an existing one has missing entries added, wrong links corrected, and entries for deleted notes removed, or is rebuilt if "Rebuild existing index.md" is on.`,
+        desc: `Keep a folder's index.md (\xA78 listing) up to date as its notes are added, renamed, and deleted, along with every listing above it \u2014 a parent describes its subdirectories by what they hold. Every folder gets one, including an empty and a newly created folder, so no listing points at a file that isn't there; the config folder and anything under "Excluded folders" are left alone. An existing index has missing entries added, wrong links corrected, and entries for deleted notes removed, or is rebuilt if "Rebuild existing index.md" is on.`,
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.autoGenerateIndex).onChange((v) => {
             s.autoGenerateIndex = v;
@@ -2004,7 +2009,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       },
       {
         name: "Excluded folders",
-        desc: "Comma-separated paths skipped during validation.",
+        desc: "Comma-separated paths skipped during validation and index generation. Use this for attachment folders you'd rather not have an index.md in.",
         control: (row) => row.addText(
           (t) => t.setValue(s.excludeFolders.join(", ")).onChange((v) => {
             s.excludeFolders = list(v);

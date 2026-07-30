@@ -174,6 +174,13 @@ export default class OkfPlugin extends Plugin {
     this.registerEvent(
       this.app.vault.on("create", (file) => {
         if (!this.layoutReady) return;
+        if (file instanceof TFolder) {
+          // A folder created in the file explorer holds nothing yet, so no note
+          // event will ever announce it. Its index says the folder is empty
+          // until something arrives to list.
+          this.markIndexDirty(file.path);
+          return;
+        }
         if (file instanceof TFile && file.extension === "md") {
           if (this.selfWrites.has(file.path)) {
             this.selfWrites.delete(file.path);
@@ -343,7 +350,7 @@ export default class OkfPlugin extends Plugin {
           path === "/" || path === ""
             ? this.app.vault.getRoot()
             : this.app.vault.getAbstractFileByPath(path);
-        if (folder instanceof TFolder) {
+        if (folder instanceof TFolder && this.folderIsIndexable(folder)) {
           await this.generateIndexForFolder(folder, false);
         }
       }
@@ -680,7 +687,7 @@ export default class OkfPlugin extends Plugin {
         // A subdirectory's document is its own index.md, so that is what the
         // entry links at. A bare `folder/` link resolves to a note that doesn't
         // exist, and clicking it creates a stray file in the vault.
-        if (!this.folderIsListable(child)) continue;
+        if (!this.folderIsIndexable(child)) continue;
         // Write that index before linking at it. Marking only ever walks up
         // from a change, so a subfolder nothing has touched is never queued on
         // its own; without this, a listing could point at an index nothing
@@ -714,19 +721,12 @@ export default class OkfPlugin extends Plugin {
     }
 
     const entries = [...subdirs, ...concepts];
-    // §8: an index enumerates the directory's contents. A directory holding
-    // nothing has no listing to write, so it gets no index rather than a stub
-    // that says so. One that already exists is still maintained, or the entries
-    // in a folder since emptied would go on pointing at notes that are gone.
+    // §8 makes an index optional, but a folder that has one is navigable and a
+    // folder that doesn't is a dead end in its parent's listing. So every
+    // folder gets one, including an empty and a newly created folder — the
+    // listing simply says it has nothing yet, and the placeholder gives way to
+    // the first real entry.
     const maintaining = current !== null && !this.settings.overwriteExistingIndex;
-    if (entries.length === 0 && !maintaining) {
-      if (notify) {
-        new Notice(
-          `OKF: nothing to list in ${folder.path || "/"}; left index.md alone.`
-        );
-      }
-      return false;
-    }
 
     let out: string;
     if (maintaining) {
@@ -773,23 +773,18 @@ export default class OkfPlugin extends Plugin {
   }
 
   /**
-   * Whether a subdirectory is worth an entry: it already has an `index.md`, or
-   * it holds something an index would list, in which case generating the parent
-   * writes that index on the way past. A folder with neither is left out rather
-   * than pointed at a file that will never be written.
+   * Whether a folder is one this plugin writes an index for and lists in its
+   * parent. Every folder in the bundle qualifies — an empty one included, since
+   * a listing that says a directory is empty is more use than a directory that
+   * can't be reached — except the ones that aren't part of the bundle at all:
+   * Obsidian's own config folder and anything the user excluded.
    */
-  private folderIsListable(folder: TFolder): boolean {
-    for (const child of folder.children) {
-      if (child instanceof TFile) {
-        if (child.extension !== "md") continue;
-        // An index.md counts — the folder already documents itself. A lone
-        // log.md doesn't; a changelog with nothing to change isn't a listing.
-        if (isReserved(child.path) !== "log") return true;
-      } else if (child instanceof TFolder && this.folderIsListable(child)) {
-        return true;
-      }
-    }
-    return false;
+  private folderIsIndexable(folder: TFolder): boolean {
+    const path = folder.path;
+    if (path === "/" || path === "") return true;
+    const config = this.app.vault.configDir;
+    if (path === config || path.startsWith(config + "/")) return false;
+    return !isExcluded(path, this.settings);
   }
 
   /**
@@ -801,7 +796,7 @@ export default class OkfPlugin extends Plugin {
   private indexesMissingBelow(folder: TFolder): boolean {
     for (const child of folder.children) {
       if (!(child instanceof TFolder)) continue;
-      if (!this.folderIsListable(child)) continue;
+      if (!this.folderIsIndexable(child)) continue;
       const has =
         this.app.vault.getAbstractFileByPath(`${child.path}/index.md`) instanceof
         TFile;
@@ -817,20 +812,22 @@ export default class OkfPlugin extends Plugin {
     }
     this.busy = true;
     try {
-      const folders = new Set<TFolder>();
-      for (const f of this.candidateFiles()) {
-        // Every folder above the note, not just the one holding it. A folder
-        // that contains nothing but subfolders still gets listed by its parent
-        // — listability looks all the way down — so it needs an index.md of its
-        // own, or that entry points at a file nothing would ever write.
-        for (let p = f.parent; p; p = p.parent) folders.add(p);
-      }
+      // Walk the folder tree rather than the notes in it. A folder that holds
+      // no notes — empty, or nothing but subfolders — still gets an index, so
+      // there is nothing to find it by except the tree itself.
+      const list: TFolder[] = [];
+      const walk = (folder: TFolder) => {
+        if (!this.folderIsIndexable(folder)) return;
+        list.push(folder);
+        for (const child of folder.children) {
+          if (child instanceof TFolder) walk(child);
+        }
+      };
+      walk(this.app.vault.getRoot());
       // Deepest folders first: a parent links to — and quotes the description
       // section of — its children's index.md, so those must be in place before
       // the parent listing is written.
-      const list = [...folders].sort(
-        (a, b) => folderDepth(b.path) - folderDepth(a.path)
-      );
+      list.sort((a, b) => folderDepth(b.path) - folderDepth(a.path));
       let written = 0;
       await this.processQueue(
         list,
@@ -1014,7 +1011,7 @@ class OkfSettingTab extends PluginSettingTab {
       },
       {
         name: "Auto-generate index.md",
-        desc: "Keep a folder's index.md (§8 listing) up to date as its notes are added, renamed, and deleted, along with every listing above it — a parent describes its subdirectories by what they hold. Generating a folder also writes the indexes of the subfolders it links at, however deep, so a listing never points at a file that isn't there. A folder with something to list gets an index generated; an existing one has missing entries added, wrong links corrected, and entries for deleted notes removed, or is rebuilt if \"Rebuild existing index.md\" is on.",
+        desc: "Keep a folder's index.md (§8 listing) up to date as its notes are added, renamed, and deleted, along with every listing above it — a parent describes its subdirectories by what they hold. Every folder gets one, including an empty and a newly created folder, so no listing points at a file that isn't there; the config folder and anything under \"Excluded folders\" are left alone. An existing index has missing entries added, wrong links corrected, and entries for deleted notes removed, or is rebuilt if \"Rebuild existing index.md\" is on.",
         control: (row) =>
           row.addToggle((tg) =>
             tg.setValue(s.autoGenerateIndex).onChange((v) => {
@@ -1117,7 +1114,7 @@ class OkfSettingTab extends PluginSettingTab {
       },
       {
         name: "Excluded folders",
-        desc: "Comma-separated paths skipped during validation.",
+        desc: "Comma-separated paths skipped during validation and index generation. Use this for attachment folders you'd rather not have an index.md in.",
         control: (row) =>
           row.addText((t) =>
             t.setValue(s.excludeFolders.join(", ")).onChange((v) => {

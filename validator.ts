@@ -336,6 +336,12 @@ function linkKey(dest: string): string {
 /** The full listing for a folder, replacing whatever the index held before. */
 export function renderIndex(entries: IndexEntry[], keep = ""): string {
   let out = keep ? `${keep}\n\n` : "";
+  // A directory with nothing in it still gets a listing that says so, rather
+  // than no index at all. The placeholder is what a real entry replaces when
+  // the folder gains its first note (see `appendToSection`).
+  if (entries.length === 0) {
+    return `${out}# Concepts\n\n_No concepts yet._\n`;
+  }
   let section = "";
   for (const e of entries) {
     if (e.section !== section) {
@@ -995,7 +1001,17 @@ function validateIndex(content: string, isRoot: boolean): OkfIssue[] {
   const body = hasFm ? split.body : content;
   const hasHeading = /^#{1,6}\s+\S/m.test(body);
   const hasLinkBullet = /^\s*[*-]\s+\[[^\]]+\]\([^)]+\)/m.test(body);
-  if (body.trim().length > 0 && !hasLinkBullet) {
+  // An empty directory has nothing to enumerate, and §8 asks an index to
+  // enumerate what is there. A listing that holds only its headings and a
+  // `_No concepts yet._` placeholder is saying exactly that, so it isn't held
+  // to the guidance about listing contents — otherwise the index generated for
+  // a new folder would be reported the moment it was written.
+  const saysEmpty = body
+    .split(/\r?\n/)
+    .every(
+      (l) => !l.trim() || /^#{1,6}\s+\S/.test(l) || PLACEHOLDER_RE.test(l)
+    );
+  if (body.trim().length > 0 && !hasLinkBullet && !saysEmpty) {
     issues.push({
       severity: "warning",
       rule: "§8",

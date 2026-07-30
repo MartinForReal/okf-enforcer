@@ -48,18 +48,21 @@ one that exists is validated against §8.
   the section, and a rebuild carries it over, so it survives a refresh. (#8)
 
 ### Changed
-- **An empty folder no longer gets an `index.md`.** §8's listing enumerates a
-  directory's contents, so with nothing to enumerate the plugin writes nothing
-  rather than a `_No concepts yet._` stub — a stub its own §8 check then flagged
-  for listing no entries. An index a folder already has is still maintained, so
-  emptying a folder clears its listing rather than freezing it.
+- **Every folder gets an `index.md`, including an empty and a newly created
+  one.** §8 leaves the file optional, but a folder without one is a dead end in
+  its parent's listing, so the plugin writes one everywhere rather than only
+  where there is something to enumerate. An empty listing says so with a
+  `_No concepts yet._` placeholder that the first real entry replaces, and the
+  §8 check no longer reports a listing for saying a directory is empty — the
+  index generated for a new folder would otherwise be flagged the moment it was
+  written. Creating a folder in the file explorer generates its index straight
+  away; nothing else announces a folder that holds no notes yet. Obsidian's
+  config folder and anything under **Excluded folders** are left alone. (#8)
 - Subdirectory entries in a generated `index.md` now link to that folder's own
   `index.md` rather than a bare `folder/` path — clicking the bare path in
   Obsidian's default settings created a new, empty note, and an index that
-  already has one gets it corrected. A subfolder is listed only when it has an
-  index or holds something an index would list, so the link points at a file
-  that exists or is about to; a folder with neither is left out rather than
-  linked at an index that will never be written. (#8)
+  already has one gets it corrected. Every subfolder is listed and gets an index
+  of its own, so the link always points at a file that exists. (#8)
 - "Generate/refresh index.md for ALL folders" now processes deepest folders
   first, so each parent listing sees its children's freshly written indexes.
 - Descriptions in generated listings are collapsed to a single line and clipped
@@ -102,11 +105,11 @@ one that exists is validated against §8.
   indexes of the subfolders it links at, following any that are missing however
   deep they sit. The descent stops once every folder below has one, so a settled
   tree costs an in-memory walk and no writes. (#8)
-- **A folder holding only subfolders never got an `index.md`.** "Generate/refresh
-  index.md for ALL folders" visited only the folders that directly contained
-  notes, yet a parent lists a subfolder whenever it holds something at any depth
-  — so the entry linked at a `sub/index.md` nothing would ever write. The command
-  now walks up from every note it finds. (#8)
+- **A folder holding no notes never got an `index.md`.** "Generate/refresh
+  index.md for ALL folders" found its folders by looking at where the notes
+  were, so a folder holding only subfolders — or nothing at all — was invisible
+  to it, while its parent listed it and linked at an index nothing would write.
+  The command now walks the folder tree itself. (#8)
 - The community-store entry description said "OKF v0.1"; the plugin has targeted
   v0.2 since 0.3.0.
 
