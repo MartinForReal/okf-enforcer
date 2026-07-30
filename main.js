@@ -1942,14 +1942,14 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
         desc: "Value inserted into `type` when fixing notes that lack it.",
         control: (row) => row.addText(
           (t) => t.setValue(s.defaultType).onChange((v) => {
-            s.defaultType = v || "Concept";
+            s.defaultType = v.trim() || "Concept";
             save();
           })
         )
       },
       {
         name: "Default actor for `generated.by`",
-        desc: "Actor written when auto-fix adds a `generated` block (\xA77). Use `<producer>/<version>` (e.g. `okf-enforcer/0.4`) or `human:<id>`.",
+        desc: "Actor written when auto-fix adds a `generated` block (\xA77). Use `<producer>/<version>` (e.g. `okf-enforcer/0.4`) or `human:<id>`. Avoid commas \u2014 the block is written as inline YAML.",
         control: (row) => row.addText(
           (t) => t.setValue(s.defaultActor).onChange((v) => {
             s.defaultActor = v.trim() || "okf-enforcer/0.4";
@@ -1970,7 +1970,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       { name: "Automation", heading: true },
       {
         name: "Scan vault on startup",
-        desc: "Run a full conformance scan automatically when the plugin loads (deferred until the workspace is ready).",
+        desc: "Scan the whole vault for conformance when the plugin loads, once the workspace is ready.",
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.scanOnStartup).onChange((v) => {
             s.scanOnStartup = v;
@@ -1980,7 +1980,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       },
       {
         name: "Fix format issues on save",
-        desc: "When you edit a note, auto-insert missing OKF frontmatter (type/title/generated). Non-destructive; never overwrites existing values.",
+        desc: "Insert missing OKF frontmatter (`type`, `title`, `generated`) when you edit a note. Never overwrites a value you've set.",
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.fixOnSave).onChange((v) => {
             s.fixOnSave = v;
@@ -1989,8 +1989,19 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
         )
       },
       {
+        name: "Auto-migrate to latest OKF on fix",
+        desc: 'Let auto-fix also upgrade notes to the latest OKF version \u2014 `timestamp` \u2192 `generated`, `# Citations` \u2192 `sources`. Off leaves this to the "Migrate note to latest OKF" command, since a migration rewrites what you wrote.',
+        control: (row) => row.addToggle(
+          (tg) => tg.setValue(s.autoMigrateOnFix).onChange((v) => {
+            s.autoMigrateOnFix = v;
+            save();
+          })
+        )
+      },
+      { name: "index.md", heading: true },
+      {
         name: "Auto-generate index.md",
-        desc: `Keep a folder's index.md (\xA78 listing) up to date as its notes are added, renamed, and deleted, along with every listing above it \u2014 a parent describes its subdirectories by what they hold. Entries are grouped by their \`type\` (Concepts, Metrics, \u2026), a note with no type is listed under Untyped, and files that aren't notes under Files. Every folder gets an index, including an empty and a newly created folder \u2014 one with nothing to list is left empty \u2014 so no listing points at a file that isn't there; the config folder and anything under "Excluded folders" are left alone. An existing index has missing entries added, wrong links corrected, and entries for deleted notes removed, or is rebuilt if "Rebuild existing index.md" is on.`,
+        desc: `Keep every folder's index.md (its \xA78 listing) current as notes are added, renamed, and deleted \u2014 including the listings above it, since a parent describes its subfolders by what they hold. Every folder gets an index, an empty one included; the config folder and "Excluded folders" are left alone.`,
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.autoGenerateIndex).onChange((v) => {
             s.autoGenerateIndex = v;
@@ -2000,7 +2011,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       },
       {
         name: "Generate index.md on startup",
-        desc: `Off (default): the hook above keeps listings current while the plugin is running, so nothing needs rebuilding at load. On: every folder's index.md is brought up to date once when the plugin loads, before the startup scan \u2014 for what changed while Obsidian was closed, such as a vault synced from another machine or edited outside it. Needs "Auto-generate index.md" on. Runs quietly: progress shows in the status bar, and no notice is raised when it finishes.`,
+        desc: 'Bring every index up to date once when the plugin loads, for what changed while Obsidian was closed \u2014 a vault synced from another machine, or edited outside it. Runs quietly, before the startup scan. Off by default; needs "Auto-generate index.md" on.',
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.generateIndexOnStartup).onChange((v) => {
             s.generateIndexOnStartup = v;
@@ -2010,7 +2021,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       },
       {
         name: "Rebuild existing index.md",
-        desc: "Off (default): generating an index adds the entries it doesn't already list, corrects a link that points at the wrong path, and drops one whose note this folder no longer holds, leaving your prose, ordering, titles, and edited descriptions untouched. On: the listing is rewritten from the folder's contents, which also refreshes every description, re-sorts the entries, and re-groups them under their current `type`.",
+        desc: "Off (default): generating an index adds what it doesn't already list, corrects a link pointing at the wrong path, and drops an entry whose note is gone, leaving your prose, ordering, titles, and descriptions alone. On: the listing is rewritten from the folder's contents, which refreshes every description and re-groups entries under their current `type` \u2014 but discards any prose you added, apart from the section named below.",
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.overwriteExistingIndex).onChange((v) => {
             s.overwriteExistingIndex = v;
@@ -2020,7 +2031,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       },
       {
         name: "Subdirectory description section",
-        desc: "Heading in a subfolder's index.md whose first paragraph becomes that folder's description in the parent listing (e.g. `Purpose`). The section is preserved when that index is regenerated, so what you write there survives a refresh. Leave blank for no subdirectory descriptions. Subdirectory entries always link at the folder's own index.md.",
+        desc: "Heading in a subfolder's index.md whose first paragraph becomes that folder's description in the parent listing (e.g. `Purpose`). This is the one section a rebuild carries over. Blank leaves subfolder entries undescribed.",
         control: (row) => row.addText(
           (t) => t.setPlaceholder("Purpose").setValue(s.indexSubdirDescSection).onChange((v) => {
             s.indexSubdirDescSection = v.trim();
@@ -2028,31 +2039,10 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
           })
         )
       },
-      {
-        name: "Auto-migrate to latest OKF on fix",
-        desc: 'Let auto-fix (and fix-on-save) also upgrade notes to the latest OKF version \u2014 e.g. rewrite legacy `timestamp` \u2192 `generated` and lift `# Citations` \u2192 `sources`. On by default. Turn off to keep migrations manual via the "Migrate note to latest OKF" command, since they rewrite existing content.',
-        control: (row) => row.addToggle(
-          (tg) => tg.setValue(s.autoMigrateOnFix).onChange((v) => {
-            s.autoMigrateOnFix = v;
-            save();
-          })
-        )
-      },
-      {
-        name: "Batch size",
-        desc: "Files processed per async chunk during scan/fix. Lower = smoother UI on large vaults; higher = faster.",
-        control: (row) => row.addText(
-          (t) => t.setValue(String(s.batchSize)).onChange((v) => {
-            const n = parseInt(v, 10);
-            s.batchSize = isNaN(n) || n < 1 ? 50 : Math.min(n, 1e3);
-            save();
-          })
-        )
-      },
       { name: "Rules", heading: true },
       {
         name: "Warn on missing recommended fields",
-        desc: "title, description, generated (\xA74.1, \xA75.2).",
+        desc: "Warn when `title`, `description`, or `generated` is missing (\xA74.1, \xA75.2).",
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.warnRecommendedFields).onChange((v) => {
             s.warnRecommendedFields = v;
@@ -2061,8 +2051,18 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
         )
       },
       {
+        name: "Warn on missing tags",
+        desc: "Warn when a note has no `tags`. Off by default \u2014 the spec doesn't ask for them.",
+        control: (row) => row.addToggle(
+          (tg) => tg.setValue(s.warnTagsField).onChange((v) => {
+            s.warnTagsField = v;
+            save();
+          })
+        )
+      },
+      {
         name: "Validate trust & lifecycle fields",
-        desc: "When present, check the v0.2 families: `verified` shape + actors, `status` vocabulary, `stale_after` date, and `sources` (\xA75). Advisory \u2014 off by default.",
+        desc: "Check the v0.2 trust fields on notes that carry them: `verified`, `status`, `stale_after`, `sources` (\xA75). Advisory; off by default.",
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.warnTrustFields).onChange((v) => {
             s.warnTrustFields = v;
@@ -2080,18 +2080,10 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
           })
         )
       },
-      {
-        name: "Warn on missing tags",
-        control: (row) => row.addToggle(
-          (tg) => tg.setValue(s.warnTagsField).onChange((v) => {
-            s.warnTagsField = v;
-            save();
-          })
-        )
-      },
+      { name: "Scope & performance", heading: true },
       {
         name: "Excluded folders",
-        desc: "Comma-separated paths skipped during validation and index generation. Use this for attachment folders you'd rather not have an index.md in.",
+        desc: "Comma-separated paths skipped by validation and index generation \u2014 use it for an attachments folder you'd rather not have an index.md in. The config folder is always skipped.",
         control: (row) => row.addText(
           (t) => t.setValue(s.excludeFolders.join(", ")).onChange((v) => {
             s.excludeFolders = list(v);
@@ -2099,10 +2091,21 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
           })
         )
       },
+      {
+        name: "Batch size",
+        desc: "Files processed per async chunk during scan/fix. Lower = smoother UI on large vaults; higher = faster.",
+        control: (row) => row.addText(
+          (t) => t.setValue(String(s.batchSize)).onChange((v) => {
+            const n = parseInt(v, 10);
+            s.batchSize = isNaN(n) || n < 1 ? 50 : Math.min(n, 1e3);
+            save();
+          })
+        )
+      },
       { name: "Portent", heading: true },
       {
         name: "Enable Portent validation",
-        desc: "Experimental (beta) \u2014 the Portent spec is pre-1.0 and may still change. Additionally validate notes against the Portent spec (portent.md): default type vocabulary (Project, Operation, Responsibility, Task, Event, Note, Topic, Person), lifecycle metadata (optional and format-free; status / organized / archived, or omitted when organized by default), and relationship shape (belongs_to, related_to as wikilinks). All Portent findings are warnings \u2014 they never block OKF conformance.",
+        desc: "Also check notes against the Portent spec (portent.md) \u2014 its type vocabulary, lifecycle, and `belongs_to`/`related_to` links. Findings are always warnings and never block OKF conformance. Experimental: Portent is pre-1.0 and may still change.",
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.enablePortent).onChange((v) => {
             s.enablePortent = v;
@@ -2113,7 +2116,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       },
       {
         name: "Validate type vocabulary",
-        desc: "Warn when `type` is not one of the configured Portent types. Turn off if you use your own type names.",
+        desc: "Warn when `type` isn't one of the accepted values set under Portent schema.",
         portentDependent: true,
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.portentCheckTypeVocab).onChange((v) => {
@@ -2124,7 +2127,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       },
       {
         name: "Validate lifecycle",
-        desc: "Check lifecycle values when present (status maps to the configured set; `organized`/`archived` are booleans). A missing lifecycle is never flagged.",
+        desc: "Check lifecycle values on notes that carry them. A note with no lifecycle is never flagged.",
         portentDependent: true,
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.portentCheckLifecycle).onChange((v) => {
@@ -2135,7 +2138,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       },
       {
         name: "Validate belongs_to",
-        desc: "Check `belongs_to` shape when present (a single wikilink to the primary parent).",
+        desc: "Check `belongs_to` when present \u2014 a single wikilink to the primary parent.",
         portentDependent: true,
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.portentCheckBelongsTo).onChange((v) => {
@@ -2146,7 +2149,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       },
       {
         name: "Validate related_to",
-        desc: "Check `related_to` shape when present (a list of wikilinks).",
+        desc: "Check `related_to` when present \u2014 a list of wikilinks.",
         portentDependent: true,
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.portentCheckRelatedTo).onChange((v) => {
@@ -2157,7 +2160,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       },
       {
         name: "Portent schema",
-        desc: "Customize the frontmatter keys and vocabularies Portent checks \u2014 track your own conventions or a future spec revision without a plugin update. Leave a field blank to restore its default.",
+        desc: "Rename the frontmatter keys and redefine the vocabularies Portent checks, to match your own conventions or a future spec revision. Leave a field blank to restore its default.",
         heading: true,
         portentDependent: true
       },

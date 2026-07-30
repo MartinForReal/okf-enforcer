@@ -103,6 +103,24 @@ exists is validated against §8.
   it visited.
 - The default `generated.by` actor is now `okf-enforcer/0.4`. Existing vaults keep
   the actor already saved in their settings.
+- **The settings tab reads shorter and groups by subject.** Every option's
+  description was rewritten to a sentence or two — the four that had grown into
+  paragraphs (**Auto-generate index.md**, **Generate index.md on startup**,
+  **Rebuild existing index.md**, **Enable Portent validation**) most of all — and
+  **Warn on missing tags**, which had no description at all, gained one. The
+  index options moved out of **Automation** into their own **index.md** group,
+  **Excluded folders** and **Batch size** into **Scope & performance**: neither
+  scoping nor throughput is automation, and **Excluded folders** governs index
+  generation as much as validation. No setting was renamed, removed, or given a
+  new default, so nothing needs migrating.
+- **Rebuild existing index.md now says what it costs.** Its description read as a
+  list of what a rebuild refreshes and never mentioned that a rebuild discards
+  the file's prose, keeping only the section named by **Subdirectory description
+  section**. Both descriptions now say so.
+- **Default type for auto-fix is trimmed**, like the actor field already was. A
+  value of only spaces used to reach the frontmatter as `type:` with nothing
+  after it, which the plugin then reported as an error against the note — it now
+  falls back to `Concept`.
 
 ### Removed
 - **Check reserved files** setting. `index.md` / `log.md` structure is now always
