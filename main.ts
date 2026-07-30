@@ -681,9 +681,26 @@ export default class OkfPlugin extends Plugin {
         // entry links at. A bare `folder/` link resolves to a note that doesn't
         // exist, and clicking it creates a stray file in the vault.
         if (!this.folderIsListable(child)) continue;
-        const childIndex = this.app.vault.getAbstractFileByPath(
+        // Write that index before linking at it. Marking only ever walks up
+        // from a change, so a subfolder nothing has touched is never queued on
+        // its own; without this, a listing could point at an index nothing
+        // writes. Descending also when an index is missing deeper down is what
+        // reaches a folder that has an index of its own but subdirectories that
+        // don't — the entries there would dangle just the same. The condition
+        // goes false once every folder below has one, so a settled tree costs an
+        // in-memory walk and no reads.
+        let childIndex = this.app.vault.getAbstractFileByPath(
           `${child.path}/index.md`
         );
+        if (
+          !(childIndex instanceof TFile) ||
+          this.indexesMissingBelow(child)
+        ) {
+          await this.generateIndexForFolder(child, false);
+          childIndex = this.app.vault.getAbstractFileByPath(
+            `${child.path}/index.md`
+          );
+        }
         subdirs.push({
           section: "Subdirectories",
           link: `${encodeURI(child.name)}/index.md`,
@@ -757,10 +774,9 @@ export default class OkfPlugin extends Plugin {
 
   /**
    * Whether a subdirectory is worth an entry: it already has an `index.md`, or
-   * it holds something an index would list, so the `sub/index.md` the parent
-   * links at either exists or appears as soon as that folder is generated. A
-   * folder with neither is left out rather than pointed at a file that will
-   * never be written.
+   * it holds something an index would list, in which case generating the parent
+   * writes that index on the way past. A folder with neither is left out rather
+   * than pointed at a file that will never be written.
    */
   private folderIsListable(folder: TFolder): boolean {
     for (const child of folder.children) {
@@ -772,6 +788,24 @@ export default class OkfPlugin extends Plugin {
       } else if (child instanceof TFolder && this.folderIsListable(child)) {
         return true;
       }
+    }
+    return false;
+  }
+
+  /**
+   * Whether any folder worth listing somewhere below this one still has no
+   * `index.md`. Answered from the loaded file tree alone — no reads — so it is
+   * cheap to ask on every generation, and it stops being true once the tree has
+   * been filled in once.
+   */
+  private indexesMissingBelow(folder: TFolder): boolean {
+    for (const child of folder.children) {
+      if (!(child instanceof TFolder)) continue;
+      if (!this.folderIsListable(child)) continue;
+      const has =
+        this.app.vault.getAbstractFileByPath(`${child.path}/index.md`) instanceof
+        TFile;
+      if (!has || this.indexesMissingBelow(child)) return true;
     }
     return false;
   }
@@ -980,7 +1014,7 @@ class OkfSettingTab extends PluginSettingTab {
       },
       {
         name: "Auto-generate index.md",
-        desc: "Keep a folder's index.md (§8 listing) up to date as its notes are added, renamed, and deleted, along with every listing above it — a parent describes its subdirectories by what they hold. A folder with something to list gets an index generated; an existing one has missing entries added, wrong links corrected, and entries for deleted notes removed, or is rebuilt if \"Rebuild existing index.md\" is on.",
+        desc: "Keep a folder's index.md (§8 listing) up to date as its notes are added, renamed, and deleted, along with every listing above it — a parent describes its subdirectories by what they hold. Generating a folder also writes the indexes of the subfolders it links at, however deep, so a listing never points at a file that isn't there. A folder with something to list gets an index generated; an existing one has missing entries added, wrong links corrected, and entries for deleted notes removed, or is rebuilt if \"Rebuild existing index.md\" is on.",
         control: (row) =>
           row.addToggle((tg) =>
             tg.setValue(s.autoGenerateIndex).onChange((v) => {

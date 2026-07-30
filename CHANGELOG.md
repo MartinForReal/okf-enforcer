@@ -94,6 +94,14 @@ one that exists is validated against §8.
   and a newly filled subfolder went unlisted. Every folder above a change is now
   refreshed, deepest first, so a parent sees its children's updated indexes.
   (#8)
+- **A subdirectory's own subdirectories went unlisted.** A listing links at
+  `sub/index.md`, but only the folder a change landed in was ever queued, so a
+  subfolder nothing had touched never got the index its parent pointed at — the
+  entry dangled, and a folder that already had an index was skipped entirely, so
+  nothing below it was reached either. Generating a folder now writes the
+  indexes of the subfolders it links at, following any that are missing however
+  deep they sit. The descent stops once every folder below has one, so a settled
+  tree costs an in-memory walk and no writes. (#8)
 - **A folder holding only subfolders never got an `index.md`.** "Generate/refresh
   index.md for ALL folders" visited only the folders that directly contained
   notes, yet a parent lists a subfolder whenever it holds something at any depth

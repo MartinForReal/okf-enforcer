@@ -1650,9 +1650,15 @@ Click to open the report`
         });
       } else if (child instanceof import_obsidian3.TFolder) {
         if (!this.folderIsListable(child)) continue;
-        const childIndex = this.app.vault.getAbstractFileByPath(
+        let childIndex = this.app.vault.getAbstractFileByPath(
           `${child.path}/index.md`
         );
+        if (!(childIndex instanceof import_obsidian3.TFile) || this.indexesMissingBelow(child)) {
+          await this.generateIndexForFolder(child, false);
+          childIndex = this.app.vault.getAbstractFileByPath(
+            `${child.path}/index.md`
+          );
+        }
         subdirs.push({
           section: "Subdirectories",
           link: `${encodeURI(child.name)}/index.md`,
@@ -1713,10 +1719,9 @@ ${out}`;
   }
   /**
    * Whether a subdirectory is worth an entry: it already has an `index.md`, or
-   * it holds something an index would list, so the `sub/index.md` the parent
-   * links at either exists or appears as soon as that folder is generated. A
-   * folder with neither is left out rather than pointed at a file that will
-   * never be written.
+   * it holds something an index would list, in which case generating the parent
+   * writes that index on the way past. A folder with neither is left out rather
+   * than pointed at a file that will never be written.
    */
   folderIsListable(folder) {
     for (const child of folder.children) {
@@ -1726,6 +1731,21 @@ ${out}`;
       } else if (child instanceof import_obsidian3.TFolder && this.folderIsListable(child)) {
         return true;
       }
+    }
+    return false;
+  }
+  /**
+   * Whether any folder worth listing somewhere below this one still has no
+   * `index.md`. Answered from the loaded file tree alone — no reads — so it is
+   * cheap to ask on every generation, and it stops being true once the tree has
+   * been filled in once.
+   */
+  indexesMissingBelow(folder) {
+    for (const child of folder.children) {
+      if (!(child instanceof import_obsidian3.TFolder)) continue;
+      if (!this.folderIsListable(child)) continue;
+      const has = this.app.vault.getAbstractFileByPath(`${child.path}/index.md`) instanceof import_obsidian3.TFile;
+      if (!has || this.indexesMissingBelow(child)) return true;
     }
     return false;
   }
@@ -1893,7 +1913,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       },
       {
         name: "Auto-generate index.md",
-        desc: `Keep a folder's index.md (\xA78 listing) up to date as its notes are added, renamed, and deleted, along with every listing above it \u2014 a parent describes its subdirectories by what they hold. A folder with something to list gets an index generated; an existing one has missing entries added, wrong links corrected, and entries for deleted notes removed, or is rebuilt if "Rebuild existing index.md" is on.`,
+        desc: `Keep a folder's index.md (\xA78 listing) up to date as its notes are added, renamed, and deleted, along with every listing above it \u2014 a parent describes its subdirectories by what they hold. Generating a folder also writes the indexes of the subfolders it links at, however deep, so a listing never points at a file that isn't there. A folder with something to list gets an index generated; an existing one has missing entries added, wrong links corrected, and entries for deleted notes removed, or is rebuilt if "Rebuild existing index.md" is on.`,
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.autoGenerateIndex).onChange((v) => {
             s.autoGenerateIndex = v;
