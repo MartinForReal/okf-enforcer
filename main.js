@@ -250,8 +250,14 @@ function sectionBlock(content, section) {
   while (end < lines.length && !/^#{1,6}\s+\S/.test(lines[end])) end++;
   return lines.slice(start, end).join("\n").trim();
 }
+function escapeLinkText(text) {
+  return text.replace(/([\\[\]])/g, "\\$1");
+}
+function encodeLink(name) {
+  return encodeURI(name).replace(/\(/g, "%28").replace(/\)/g, "%29").replace(/#/g, "%23").replace(/\?/g, "%3F");
+}
 function renderEntry(e) {
-  return `* [${e.title}](${e.link})${e.desc ? ` - ${e.desc}` : ""}`;
+  return `* [${escapeLinkText(e.title)}](${e.link})${e.desc ? ` - ${e.desc}` : ""}`;
 }
 var INDEX_SECTIONS = {
   subdirs: "Subdirectories",
@@ -286,8 +292,56 @@ function sectionForType(type) {
   return words.join(" ");
 }
 var BULLET_RE = /^\s*[*\-+]\s+\S/;
-var BULLET_LINK_RE = /^(\s*[*\-+]\s+\[[^\]]*\]\()([^)]*)\)/;
+var BULLET_MARKER_RE = /^(\s*[*\-+]\s+)/;
+var LIST_MARKER_RE = /^(\s*(?:[*\-+]|\d{1,9}[.)])\s+)/;
+var ORDINAL_RE = /^\s*(\d{1,9})[.)]\s/;
 var PLACEHOLDER_RE = /^\s*_No .+ yet\._\s*$/;
+var BULLET_WIKILINK_RE = /^\s*(?:[*\-+]|\d{1,9}[.)])\s+\[\[([^\]|#^]*)/;
+function readDest(line, open) {
+  let j = open;
+  for (let depth = 1; j < line.length; j++) {
+    const c = line[j];
+    if (c === "\\") j++;
+    else if (c === "(") depth++;
+    else if (c === ")" && --depth === 0) break;
+  }
+  return line[j] === ")" ? { dest: line.slice(open, j), end: j } : null;
+}
+function parseBulletLink(line) {
+  var _a;
+  const marker = line.match(LIST_MARKER_RE);
+  if (!marker || line[marker[0].length] !== "[") return null;
+  const start = marker[0].length + 1;
+  let nested;
+  let i = start;
+  for (let depth = 1; i < line.length; i++) {
+    const c = line[i];
+    if (c === "\\") i++;
+    else if (c === "[") depth++;
+    else if (c === "]") {
+      if (depth > 1 && nested === void 0 && line[i + 1] === "(") {
+        nested = (_a = readDest(line, i + 2)) == null ? void 0 : _a.dest;
+      }
+      if (--depth === 0) break;
+    }
+  }
+  if (line[i] !== "]" || line[i + 1] !== "(") {
+    const first = line.indexOf("]", start);
+    if (first < 0 || line[first + 1] !== "(") return null;
+    i = first;
+    nested = void 0;
+  }
+  const open = i + 2;
+  const dest = readDest(line, open);
+  if (!dest) return null;
+  return {
+    prefix: line.slice(0, open),
+    dest: dest.dest,
+    suffix: line.slice(dest.end),
+    ordered: !BULLET_MARKER_RE.test(marker[0]),
+    nested
+  };
+}
 function splitDest(dest) {
   const rest = dest.replace(/^\s+/, "");
   const angled = rest.match(/^<([^>]*)>/);
@@ -299,17 +353,32 @@ function splitDest(dest) {
 }
 function decodePath(target) {
   const t = target.replace(/^\.\//, "");
+  const literal = (s) => s.replace(/%23/gi, "#").replace(/%3F/gi, "?");
   try {
-    return decodeURI(t);
+    return decodeURI(literal(t));
   } catch (e) {
-    return t;
+    return literal(t);
   }
 }
+function splitFragment(target) {
+  const at = target.slice(1).search(/[#?]/);
+  return at < 0 ? { path: target, fragment: "" } : { path: target.slice(0, at + 1), fragment: target.slice(at + 1) };
+}
 function sameTarget(a, b) {
-  return decodePath(a) === decodePath(b);
+  return decodePath(splitFragment(a).path) === decodePath(splitFragment(b).path);
+}
+function pathKey(path) {
+  return decodePath(path).replace(/\/index\.md$/i, "").replace(/\/+$/, "").toLowerCase();
 }
 function linkKey(dest) {
-  return decodePath(splitDest(dest).target).replace(/\/index\.md$/i, "").replace(/\/+$/, "").toLowerCase();
+  return pathKey(splitFragment(splitDest(dest).target).path);
+}
+function wikilinkKeys(target, canonical) {
+  const t = target.trim();
+  if (!t) return [];
+  if (/\.[a-z0-9]+$/i.test(t) || t.endsWith("/")) return [pathKey(t)];
+  const md = pathKey(`${t}.md`);
+  return canonical.has(md) ? [md] : [pathKey(t)];
 }
 function renderIndex(entries, keep = "") {
   if (entries.length === 0) return keep ? `${keep}
@@ -331,11 +400,12 @@ function renderIndex(entries, keep = "") {
   }
   return out;
 }
+var FENCE_RE = /^\s{0,3}(`{3,}|~{3,})/;
 function fencedLines(lines) {
   const mask = [];
   let fence = "";
   for (const line of lines) {
-    const open = line.match(/^\s{0,3}(`{3,}|~{3,})/);
+    const open = line.match(FENCE_RE);
     if (open) {
       if (!fence) fence = open[1][0];
       else if (open[1][0] === fence) fence = "";
@@ -345,6 +415,15 @@ function fencedLines(lines) {
     mask.push(fence !== "");
   }
   return mask;
+}
+function ordinalOpensList(lines, i) {
+  const n = lines[i].match(ORDINAL_RE);
+  if (!n || n[1] === "1") return true;
+  for (let j = i - 1; j >= 0; j--) {
+    if (LIST_MARKER_RE.test(lines[j]) || /^\s{2,}\S/.test(lines[j])) return true;
+    if (!lines[j].trim() || /^#{1,6}\s/.test(lines[j])) return j === i - 1;
+  }
+  return i === 0;
 }
 function isOwnEntry(target) {
   if (!target || target.startsWith("/") || target.startsWith("#")) return false;
@@ -374,22 +453,48 @@ function mergeIndex(existing, entries, exists) {
       section = head[1].trim();
       continue;
     }
-    const m = lines[i].match(BULLET_LINK_RE);
-    if (!m) continue;
-    const key = linkKey(m[2]);
+    if (!ordinalOpensList(lines, i)) continue;
+    const link = parseBulletLink(lines[i]);
+    if (!link) {
+      const wiki = lines[i].match(BULLET_WIKILINK_RE);
+      if (wiki) for (const key2 of wikilinkKeys(wiki[1], canonical)) listed.add(key2);
+      continue;
+    }
+    const { target, trailer } = splitDest(link.dest);
+    const split = splitFragment(target);
+    const wholeKey = pathKey(target);
+    const splitKey = pathKey(split.path);
+    let names = false;
+    if (wholeKey !== splitKey) {
+      if (canonical.has(wholeKey) || !isOwnEntry(target)) {
+        names = true;
+      } else {
+        const alt = canonical.get(splitKey);
+        const risky = alt === void 0 ? !!exists && isOwnEntry(split.path) : !sameTarget(split.path, alt);
+        names = risky && !!exists && exists(decodePath(target).replace(/\/+$/, ""));
+      }
+    }
+    const targetPath = names ? target : split.path;
+    const fragment = names ? "" : split.fragment;
+    if (link.nested !== void 0) {
+      listed.add(linkKey(link.nested));
+      continue;
+    }
+    const key = pathKey(targetPath);
     listed.add(key);
+    if (link.ordered) continue;
     const want = canonical.get(key);
-    const { target, trailer } = splitDest(m[2]);
     if (want === void 0) {
-      const path = decodePath(target).replace(/\/+$/, "");
-      if (exists && isOwnEntry(target) && !exists(path)) {
+      const whole = decodePath(target).replace(/\/+$/, "");
+      const path = decodePath(targetPath).replace(/\/+$/, "");
+      if (exists && isOwnEntry(target) && !exists(whole) && (path === whole || !exists(path))) {
         stale.push(i);
         emptied.add(section);
       }
       continue;
     }
-    if (!sameTarget(target, want)) {
-      lines[i] = m[1] + want + trailer + lines[i].slice(m[1].length + m[2].length);
+    if (!sameTarget(targetPath, want)) {
+      lines[i] = link.prefix + want + fragment + trailer + link.suffix;
       changed = true;
     }
   }
@@ -401,8 +506,12 @@ function mergeIndex(existing, entries, exists) {
     }
     changed = true;
   }
+  const owned = new Set(
+    Object.values(INDEX_SECTIONS).map((s) => s.toLowerCase())
+  );
+  for (const e of entries) owned.add(e.section.trim().toLowerCase());
   for (const name of emptied) {
-    if (!name) continue;
+    if (!name || !owned.has(name.trim().toLowerCase())) continue;
     const at = headingIndex(lines, name);
     if (at < 0) continue;
     let end = at + 1;
@@ -426,19 +535,40 @@ function mergeIndex(existing, entries, exists) {
   }
   if (!changed) return existing;
   while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
-  if (lines.length === 0) return prefix;
+  if (prefix && lines.length && lines[0].trim()) lines.unshift("", "");
+  if (lines.length === 0) return prefix ? prefix + eol : "";
   return prefix + lines.join(eol) + eol;
 }
+function fenceOpenAtEnd(lines) {
+  let fence = "";
+  for (const line of lines) {
+    const open = line.match(FENCE_RE);
+    if (!open) continue;
+    if (!fence) fence = open[1][0];
+    else if (open[1][0] === fence) fence = "";
+  }
+  return fence !== "";
+}
+function writableEnd(lines) {
+  if (!fenceOpenAtEnd(lines)) return lines.length;
+  const fenced = fencedLines(lines);
+  let end = lines.length;
+  while (end > 0 && fenced[end - 1]) end--;
+  return end;
+}
 function appendToSection(lines, section, items) {
-  const start = headingIndex(lines, section);
+  const limit = writableEnd(lines);
+  const start = headingIndex(lines.slice(0, limit), section);
   if (start < 0) {
-    while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
-    if (lines.length) lines.push("");
-    lines.push(`# ${section}`, "", ...items);
+    let at2 = limit;
+    while (at2 > 0 && !lines[at2 - 1].trim()) at2--;
+    const drop = limit === lines.length ? limit - at2 : 0;
+    const head = at2 > 0 ? ["", `# ${section}`, ""] : [`# ${section}`, ""];
+    lines.splice(at2, drop, ...head, ...items);
     return;
   }
   let end = start + 1;
-  while (end < lines.length && !/^#{1,6}\s+\S/.test(lines[end])) end++;
+  while (end < limit && !/^#{1,6}\s+\S/.test(lines[end])) end++;
   const fenced = fencedLines(lines);
   for (let i = end - 1; i > start; i--) {
     if (!fenced[i] && PLACEHOLDER_RE.test(lines[i])) {
@@ -822,7 +952,7 @@ function validateIndex(content, isRoot) {
   }
   const body = hasFm ? split.body : content;
   const hasHeading = /^#{1,6}\s+\S/m.test(body);
-  const hasLinkBullet = /^\s*[*-]\s+\[[^\]]+\]\([^)]+\)/m.test(body);
+  const hasLinkBullet = body.split(/\r?\n/).some((l) => parseBulletLink(l) !== null || BULLET_WIKILINK_RE.test(l));
   const saysEmpty = body.split(/\r?\n/).every(
     (l) => !l.trim() || /^#{1,6}\s+\S/.test(l) || PLACEHOLDER_RE.test(l)
   );
@@ -1697,7 +1827,7 @@ Click to open the report`
         if (child.extension !== "md") {
           files.push({
             section: INDEX_SECTIONS.files,
-            link: encodeURI(child.name),
+            link: encodeLink(child.name),
             title: child.name,
             desc: ""
           });
@@ -1706,13 +1836,14 @@ Click to open the report`
         const fm = (_b = (_a = this.app.metadataCache.getFileCache(child)) == null ? void 0 : _a.frontmatter) != null ? _b : {};
         const fmTitle = fm["title"];
         const fmDesc = fm["description"];
-        const title = typeof fmTitle === "string" && fmTitle.length > 0 ? fmTitle : basename(child.path);
+        const fmTitleText = typeof fmTitle === "string" ? oneLine(fmTitle) : "";
+        const title = fmTitleText || basename(child.path);
         const desc = typeof fmDesc === "string" ? oneLine(fmDesc) : "";
         const section = sectionForType(fm["type"]);
         const bucket = byType.get(section);
         const entry = {
           section,
-          link: encodeURI(child.name),
+          link: encodeLink(child.name),
           title,
           desc
         };
@@ -1731,7 +1862,7 @@ Click to open the report`
         }
         subdirs.push({
           section: INDEX_SECTIONS.subdirs,
-          link: `${encodeURI(child.name)}/index.md`,
+          link: `${encodeLink(child.name)}/index.md`,
           title: child.name,
           desc: childIndex instanceof import_obsidian3.TFile ? await this.folderDescription(childIndex) : ""
         });

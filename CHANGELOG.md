@@ -162,6 +162,78 @@ exists is validated against §8.
   existing index produced a file holding a single newline rather than an empty
   one, so a folder whose last note was deleted didn't match the empty index a
   rebuild writes for the same folder. (#8)
+- **A `]` in a title grew the index on every pass.** An entry was recognised by a
+  pattern that stopped at the first `]`, so `* [Rev [2] notes](rev.md)` read as
+  naming something the folder didn't hold — the plugin couldn't find the entry it
+  had just written, and appended a fresh copy every time the folder was touched.
+  Titles and destinations are now read with their brackets and parentheses
+  balanced, so an entry the plugin writes is one it can find again. This happened
+  on default settings. (#8)
+- **Parentheses in a file name truncated the entry.** `report (1).pdf` was
+  written as `report%20(1).pdf` — `encodeURI` leaves parentheses alone — and read
+  back as a link to `report%20(1`, so the entry was rewritten with everything
+  after it, hand-written description included, thrown away. Destinations now
+  escape their parentheses, and reading one balances them. (#8)
+- **An entry linking at a heading was deleted.** `* [Simple Paxos](paxos.md#simple)`
+  names `paxos.md`, but the whole string was looked up as a file name, found
+  nothing, and the entry was dropped as stale — taking the author's description
+  with it. §6.1 permits broken links; only an entry naming a file the folder no
+  longer holds is a candidate. A `#fragment` or `?query` is now split off before
+  the lookup, and kept when a destination is corrected. (#8)
+- **An index written in `[[wikilinks]]` was listed twice.** Only `[Title](link)`
+  entries counted as already listed, so the first generation over an index
+  written in Obsidian's own link syntax appended a second copy of every entry.
+  Wikilink entries are now recognised — `[[note]]`, `[[note|Alias]]`,
+  `[[note#heading]]` — and left exactly as written: §8 asks for markdown links,
+  but rewriting the syntax an author chose is the same destructive move in
+  another coat. A wikilink names a file rather than spelling out a destination,
+  so none of a destination's punctuation applies inside it: `[[notes (draft)]]`
+  is that note, not `notes` with a title after it. (#8)
+- **A heading the plugin doesn't generate was removed with its entries.** Dropping
+  a stale entry took the heading above it whenever nothing was left underneath,
+  `# Reading list` and any other section an author added included. Only a heading
+  this plugin would itself write is removed now — and a type heading that has
+  emptied out (`# Concepts`) is left standing rather than deleted, since with no
+  notes left in the folder there is nothing to tell it apart from a heading
+  someone wrote. (#8)
+- **Pruning a root index glued its frontmatter to the listing.** A root
+  `index.md` whose first entry was dropped could come back as `---# Concepts`,
+  closing fence and heading on one line — a state no later pass repaired and the
+  §8 check didn't report. (#8)
+- **A title could take over the link it sat in.** A note titled
+  `See](elsewhere.md) this` rendered an entry pointing at `elsewhere.md`;
+  brackets in a title are now escaped. Titles are also collapsed to a single line
+  and clipped at 200 characters, which descriptions already were. (#8)
+- **`#` and `?` in a file name produced a link the plugin couldn't follow.**
+  `encodeURI` leaves the reserved delimiters alone, so `Meeting #3.md` was
+  written as `Meeting%20#3.md` — which Obsidian reads as a link to a note called
+  `Meeting ` at a heading. Both are now escaped, alongside the parentheses, and a
+  destination is compared with them folded back so the escaped form and one
+  typed by hand still count as the same entry — a name that literally holds the
+  characters `%23` included, which is a different file and stays one. A `#` in a
+  *folder* name no longer truncates a path either: an entry naming
+  `research#2024/papers/paxos.md` used to look like a note this folder had held
+  and lost, and a link reaching past the folder is now left alone rather than
+  read as a heading in a sibling. (#8)
+- **An entry written as a numbered list was listed a second time.** Only `*`,
+  `-` and `+` bullets were recognised, so an index written as `1. [Q](q.md)` had
+  every one of its entries appended again underneath. A numbered entry now counts
+  as a listing and, like a wikilink, is never rewritten or pruned — the shape is
+  the author's. A line that only looks like one doesn't count: CommonMark starts
+  an ordered list mid-paragraph only at `1`, so a `2.` written under prose is
+  read as the sentence it is. An embed (`![[banner.png]]`) no longer counts
+  either: it displays a file rather than linking to one, so the `# Files` entry
+  for it is still added. (#8)
+- **An unterminated ``` fence grew the index on every pass.** A fence that never
+  closes runs to the end of the file, so entries appended below it were read back
+  as sample text and appended again — a stray fence in prose was enough. New
+  entries are now placed above an unterminated fence, and only an unterminated
+  one: a file whose last line closes a block still takes new entries after it.
+  (#8)
+- **The §8 check couldn't read the entries this plugin writes.** An index whose
+  titles hold brackets, or that is written entirely in wikilinks, was reported as
+  not listing the directory's contents. The check and the merger now read an
+  entry the same way. (#8)
 - The community-store entry description said "OKF v0.1"; the plugin has targeted
   v0.2 since 0.3.0.
 

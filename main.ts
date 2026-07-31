@@ -21,6 +21,7 @@ import {
   basename,
   parentPath,
   oneLine,
+  encodeLink,
   sectionBlock,
   sectionSummary,
   mergeIndex,
@@ -695,7 +696,7 @@ export default class OkfPlugin extends Plugin {
           // would render an index that claims the folder is empty.
           files.push({
             section: INDEX_SECTIONS.files,
-            link: encodeURI(child.name),
+            link: encodeLink(child.name),
             title: child.name,
             desc: "",
           });
@@ -705,16 +706,16 @@ export default class OkfPlugin extends Plugin {
           this.app.metadataCache.getFileCache(child)?.frontmatter ?? {};
         const fmTitle = fm["title"];
         const fmDesc = fm["description"];
-        const title =
-          typeof fmTitle === "string" && fmTitle.length > 0
-            ? fmTitle
-            : basename(child.path);
+        // A title lands inside a one-line `* [Title](link)` bullet, so it gets
+        // the same collapsing and clipping the description already gets.
+        const fmTitleText = typeof fmTitle === "string" ? oneLine(fmTitle) : "";
+        const title = fmTitleText || basename(child.path);
         const desc = typeof fmDesc === "string" ? oneLine(fmDesc) : "";
         const section = sectionForType(fm["type"]);
         const bucket = byType.get(section);
         const entry: IndexEntry = {
           section,
-          link: encodeURI(child.name),
+          link: encodeLink(child.name),
           title,
           desc,
         };
@@ -747,7 +748,7 @@ export default class OkfPlugin extends Plugin {
         }
         subdirs.push({
           section: INDEX_SECTIONS.subdirs,
-          link: `${encodeURI(child.name)}/index.md`,
+          link: `${encodeLink(child.name)}/index.md`,
           title: child.name,
           desc:
             childIndex instanceof TFile
