@@ -168,6 +168,28 @@ export function trustTier(
 }
 
 /**
+ * Trust tier of a note's frontmatter, or null when it has none we can read.
+ * A convenience for callers holding raw file content rather than parsed
+ * frontmatter; unparseable YAML is reported by `validateContent`, so here it
+ * just means "no tier to show".
+ */
+export function trustTierOfContent(
+  content: string
+): "unverified" | "machine-confirmed" | "human-reviewed" | null {
+  const { hasFm, raw } = splitFrontmatter(content);
+  if (!hasFm) return null;
+  try {
+    const parsed: unknown = parseYaml(raw);
+    if (parsed && typeof parsed === "object") {
+      return trustTier(parsed as Record<string, unknown>);
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+/**
  * Whether a concept is stale per `stale_after` (§5.5): stale when
  * `today >= stale_after`. False when absent or unparseable.
  */
