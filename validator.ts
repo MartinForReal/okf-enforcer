@@ -168,6 +168,28 @@ export function trustTier(
 }
 
 /**
+ * Trust tier of a note's frontmatter, or null when it has none we can read.
+ * A convenience for callers holding raw file content rather than parsed
+ * frontmatter; unparseable YAML is reported by `validateContent`, so here it
+ * just means "no tier to show".
+ */
+export function trustTierOfContent(
+  content: string
+): "unverified" | "machine-confirmed" | "human-reviewed" | null {
+  const { hasFm, raw } = splitFrontmatter(content);
+  if (!hasFm) return null;
+  try {
+    const parsed: unknown = parseYaml(raw);
+    if (parsed && typeof parsed === "object") {
+      return trustTier(parsed as Record<string, unknown>);
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+/**
  * Whether a concept is stale per `stale_after` (§5.5): stale when
  * `today >= stale_after`. False when absent or unparseable.
  */
@@ -1168,7 +1190,7 @@ function validateTrustFamilies(data: Record<string, unknown>): OkfIssue[] {
     }
   }
 
-  // `stale_after` (§5.5): an absolute YYYY-MM-DD date.
+  // `stale_after` (§5.5): an absolute YYYY-MM-DD date, and a review deadline.
   if ("stale_after" in data && data["stale_after"] != null) {
     const s = String(data["stale_after"]).slice(0, 10);
     if (!ISO_DATE_RE.test(s)) {
@@ -1176,6 +1198,12 @@ function validateTrustFamilies(data: Record<string, unknown>): OkfIssue[] {
         severity: "warning",
         rule: "§5.5",
         message: "`stale_after` should be an absolute date (`YYYY-MM-DD`).",
+      });
+    } else if (isStale(data)) {
+      issues.push({
+        severity: "warning",
+        rule: "§5.5",
+        message: `\`stale_after\` (${s}) has passed; this concept is due for review.`,
       });
     }
   }
@@ -1205,6 +1233,16 @@ function validateTrustFamilies(data: Record<string, unknown>): OkfIssue[] {
             severity: "warning",
             rule: "§5.1",
             message: `\`sources[${i}]\` is missing the required \`resource\`.`,
+          });
+        }
+        if (
+          "author" in e &&
+          (typeof e["author"] !== "string" || e["author"].trim().length === 0)
+        ) {
+          issues.push({
+            severity: "warning",
+            rule: "§5.1",
+            message: `\`sources[${i}].author\` should be a non-empty string.`,
           });
         }
         if ("usage_count" in e && typeof e["usage_count"] !== "number") {

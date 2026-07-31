@@ -4,6 +4,34 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Three §5 trust signals that didn't do what they promised. The derived trust tier
+and `sources[].author` were described as shipped in the 0.3.0 notes and the
+README but were never surfaced or checked; `stale_after` was validated for its
+form only, so a review deadline could pass unnoticed.
+
+### Added
+- **`stale_after` is enforced, not just parsed** ([#10](https://github.com/MartinForReal/okf-enforcer/issues/10)).
+  A note whose `stale_after` has passed is flagged as due for review; previously
+  only the date's *form* was checked, so a deadline from last year passed
+  silently. Advisory only — §11 keeps it out of conformance.
+- **The derived trust tier is shown** ([#11](https://github.com/MartinForReal/okf-enforcer/issues/11)).
+  The active note's tier (unverified / machine-confirmed / human-reviewed, §5.3)
+  appears in the status-bar tooltip. It was computed but reached no surface. The
+  report pane lists only files that *have* issues, so a conformant note would
+  never show a tier there.
+- **`sources[].author` is validated** ([#12](https://github.com/MartinForReal/okf-enforcer/issues/12)).
+  Warns when an entry's `author` is present but not a non-empty string,
+  alongside the existing `resource` / `usage_count` / `last_modified` checks.
+
+All three sit behind **Validate trust & lifecycle fields**, off by default, so no
+vault starts reporting anything new unless it had already opted in.
+
+### Fixed
+- README and the 0.3.0 changelog entry claimed derived trust tiers and
+  `sources[].author` validation that had not shipped. Corrected.
+
 ## [0.4.1] - 2026-07-31
 
 ### Changed
@@ -254,10 +282,16 @@ the fallbacks below, so existing vaults keep validating.
 ### Added
 - **Provenance / trust / lifecycle validation** (§5), opt-in via **Validate trust
   & lifecycle fields**. When present, checks `generated`/`verified` shape and the
-  actor convention (`<producer>/<version>`, `human:<id>`, `process:<id>`), derives
-  trust tiers (unverified / machine-confirmed / human-reviewed), and validates
-  `status` (`draft|stable|deprecated`), `stale_after` (absolute date), and
-  `sources` with its credibility signals (`author`/`usage_count`/`last_modified`).
+  actor convention (`<producer>/<version>`, `human:<id>`, `process:<id>`), and
+  validates `status` (`draft|stable|deprecated`), `stale_after` (absolute date),
+  and `sources` (`resource`, `usage_count`, `last_modified`).
+
+  > **Correction.** This entry originally read "derives trust tiers (unverified /
+  > machine-confirmed / human-reviewed)" and listed `author` among the validated
+  > `sources` signals. Neither was true of 0.3.0: the tier was computed but never
+  > shown anywhere, and `author` was not checked. Both are fixed in Unreleased
+  > ([#11](https://github.com/MartinForReal/okf-enforcer/issues/11),
+  > [#12](https://github.com/MartinForReal/okf-enforcer/issues/12)).
 - **Attested Computation concepts** (§10). A `type: Attested Computation` note is
   checked for a required `runtime`, a present computation (inline `# Computation`
   fence or a `computation` path), and `parameters`/`executor`/`attester` shape.
@@ -408,8 +442,13 @@ Initial release.
 - Batched, non-blocking scan/fix queue with an inline progress bar for large vaults.
 - Settings for automation toggles, batch size, warning rules, and excluded folders.
 
+[Unreleased]: https://github.com/MartinForReal/okf-enforcer/compare/0.4.1...HEAD
+[0.4.1]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.4.1
 [0.4.0]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.4.0
 [0.3.0]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.3.0
+[0.2.2]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.2.2
+[0.2.1]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.2.1
+[0.2.0]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.2.0
 [0.1.3]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.1.3
 [0.1.2]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.1.2
 [0.1.1]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.1.1

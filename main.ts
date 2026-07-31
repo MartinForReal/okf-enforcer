@@ -16,6 +16,7 @@ import {
   DEFAULT_SETTINGS,
   validateContent,
   applyFixes,
+  trustTierOfContent,
   isReserved,
   isExcluded,
   basename,
@@ -409,7 +410,7 @@ export default class OkfPlugin extends Plugin {
       this.isRoot(file),
       this.settings
     );
-    this.updateStatus(postIssues);
+    this.updateStatus(postIssues, content);
 
     const remainingErrors = postIssues.filter((i) => i.severity === "error");
     if (remainingErrors.length > 0) {
@@ -437,7 +438,7 @@ export default class OkfPlugin extends Plugin {
       this.isRoot(file),
       this.settings
     );
-    this.updateStatus(issues);
+    this.updateStatus(issues, content);
     if (openReport) {
       this.renderResults(issues.length ? [{ path: file.path, issues }] : [], 1);
       void this.activateView();
@@ -445,9 +446,16 @@ export default class OkfPlugin extends Plugin {
     }
   }
 
-  private updateStatus(issues: OkfIssue[]) {
+  private updateStatus(issues: OkfIssue[], content?: string) {
     const errs = issues.filter((i) => i.severity === "error").length;
     const warns = issues.filter((i) => i.severity === "warning").length;
+    // The derived trust tier (§5.3) describes the note rather than faulting it,
+    // so it rides in the tooltip instead of the issue list. The report pane only
+    // lists files that have issues, which would hide the tier on a clean note.
+    const tier =
+      this.settings.warnTrustFields && content !== undefined
+        ? trustTierOfContent(content)
+        : null;
     this.statusEl.removeClass(
       "okf-statusbar-ok",
       "okf-statusbar-bad",
@@ -465,15 +473,20 @@ export default class OkfPlugin extends Plugin {
     }
     // Tooltip carries the detail so we don't need a Notice for routine checks.
     if (issues.length === 0) {
-      this.statusEl.setAttribute(
-        "aria-label",
-        "Active note conforms to OKF v0.2 — click to scan the vault"
-      );
+      const lines = ["Active note conforms to OKF v0.2"];
+      if (tier) lines.push(`Trust tier: ${tier}`);
+      lines.push("");
+      lines.push("Click to scan the whole vault");
+      this.statusEl.setAttribute("aria-label", lines.join("\n"));
     } else {
       const lines = issues
         .slice(0, 8)
         .map((i) => `${i.severity === "error" ? "✖" : "⚠"} ${i.rule} ${i.message}`);
       if (issues.length > 8) lines.push(`…and ${issues.length - 8} more`);
+      if (tier) {
+        lines.push("");
+        lines.push(`Trust tier: ${tier}`);
+      }
       lines.push("");
       lines.push("Click to scan the whole vault");
       this.statusEl.setAttribute("aria-label", lines.join("\n"));
@@ -627,7 +640,7 @@ export default class OkfPlugin extends Plugin {
       this.isRoot(file),
       this.settings
     );
-    this.updateStatus(issues);
+    this.updateStatus(issues, content);
   }
 
   async fixAll() {
@@ -1158,7 +1171,7 @@ class OkfSettingTab extends PluginSettingTab {
       },
       {
         name: "Validate trust & lifecycle fields",
-        desc: "Check the v0.2 trust fields on notes that carry them: `verified`, `status`, `stale_after`, `sources` (§5). Advisory; off by default.",
+        desc: "Check the v0.2 trust fields on notes that carry them: `verified`, `status`, `stale_after` (including whether it has passed), `sources` (§5), and show the note's trust tier in the status-bar tooltip. Advisory; off by default.",
         control: (row) =>
           row.addToggle((tg) =>
             tg.setValue(s.warnTrustFields).onChange((v) => {

@@ -190,6 +190,36 @@ function normalizeVerified(data) {
   if (typeof v === "object") return [v];
   return [];
 }
+function trustTier(data) {
+  var _a;
+  const events = normalizeVerified(data);
+  if (events.length === 0) return "unverified";
+  for (const e of events) {
+    if (String((_a = e["by"]) != null ? _a : "").startsWith("human:")) return "human-reviewed";
+  }
+  return "machine-confirmed";
+}
+function trustTierOfContent(content) {
+  const { hasFm, raw } = splitFrontmatter(content);
+  if (!hasFm) return null;
+  try {
+    const parsed = (0, import_obsidian.parseYaml)(raw);
+    if (parsed && typeof parsed === "object") {
+      return trustTier(parsed);
+    }
+  } catch (e) {
+    return null;
+  }
+  return null;
+}
+function isStale(data, today = /* @__PURE__ */ new Date()) {
+  const raw = data["stale_after"];
+  if (!raw) return false;
+  const s = String(raw).slice(0, 10);
+  if (!ISO_DATE_RE.test(s)) return false;
+  const t = today.toISOString().slice(0, 10);
+  return t >= s;
+}
 function basename(path) {
   const f = path.split("/").pop() || path;
   return f.replace(/\.md$/i, "");
@@ -779,6 +809,12 @@ function validateTrustFamilies(data) {
         rule: "\xA75.5",
         message: "`stale_after` should be an absolute date (`YYYY-MM-DD`)."
       });
+    } else if (isStale(data)) {
+      issues.push({
+        severity: "warning",
+        rule: "\xA75.5",
+        message: `\`stale_after\` (${s}) has passed; this concept is due for review.`
+      });
     }
   }
   if ("sources" in data && data["sources"] != null) {
@@ -805,6 +841,13 @@ function validateTrustFamilies(data) {
             severity: "warning",
             rule: "\xA75.1",
             message: `\`sources[${i}]\` is missing the required \`resource\`.`
+          });
+        }
+        if ("author" in e && (typeof e["author"] !== "string" || e["author"].trim().length === 0)) {
+          issues.push({
+            severity: "warning",
+            rule: "\xA75.1",
+            message: `\`sources[${i}].author\` should be a non-empty string.`
           });
         }
         if ("usage_count" in e && typeof e["usage_count"] !== "number") {
@@ -1577,7 +1620,7 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
       this.isRoot(file),
       this.settings
     );
-    this.updateStatus(postIssues);
+    this.updateStatus(postIssues, content);
     const remainingErrors = postIssues.filter((i) => i.severity === "error");
     if (remainingErrors.length > 0) {
       this.promptForRequiredFields(file, remainingErrors);
@@ -1599,16 +1642,17 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
       this.isRoot(file),
       this.settings
     );
-    this.updateStatus(issues);
+    this.updateStatus(issues, content);
     if (openReport) {
       this.renderResults(issues.length ? [{ path: file.path, issues }] : [], 1);
       void this.activateView();
       if (!issues.length) new import_obsidian3.Notice("OKF: active note is conformant \u2705");
     }
   }
-  updateStatus(issues) {
+  updateStatus(issues, content) {
     const errs = issues.filter((i) => i.severity === "error").length;
     const warns = issues.filter((i) => i.severity === "warning").length;
+    const tier = this.settings.warnTrustFields && content !== void 0 ? trustTierOfContent(content) : null;
     this.statusEl.removeClass(
       "okf-statusbar-ok",
       "okf-statusbar-bad",
@@ -1625,13 +1669,18 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
       this.statusEl.addClass("okf-statusbar-ok");
     }
     if (issues.length === 0) {
-      this.statusEl.setAttribute(
-        "aria-label",
-        "Active note conforms to OKF v0.2 \u2014 click to scan the vault"
-      );
+      const lines = ["Active note conforms to OKF v0.2"];
+      if (tier) lines.push(`Trust tier: ${tier}`);
+      lines.push("");
+      lines.push("Click to scan the whole vault");
+      this.statusEl.setAttribute("aria-label", lines.join("\n"));
     } else {
       const lines = issues.slice(0, 8).map((i) => `${i.severity === "error" ? "\u2716" : "\u26A0"} ${i.rule} ${i.message}`);
       if (issues.length > 8) lines.push(`\u2026and ${issues.length - 8} more`);
+      if (tier) {
+        lines.push("");
+        lines.push(`Trust tier: ${tier}`);
+      }
       lines.push("");
       lines.push("Click to scan the whole vault");
       this.statusEl.setAttribute("aria-label", lines.join("\n"));
@@ -1781,7 +1830,7 @@ Click to open the report`
       this.isRoot(file),
       this.settings
     );
-    this.updateStatus(issues);
+    this.updateStatus(issues, content);
   }
   async fixAll() {
     if (this.busy) {
@@ -2193,7 +2242,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       },
       {
         name: "Validate trust & lifecycle fields",
-        desc: "Check the v0.2 trust fields on notes that carry them: `verified`, `status`, `stale_after`, `sources` (\xA75). Advisory; off by default.",
+        desc: "Check the v0.2 trust fields on notes that carry them: `verified`, `status`, `stale_after` (including whether it has passed), `sources` (\xA75), and show the note's trust tier in the status-bar tooltip. Advisory; off by default.",
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.warnTrustFields).onChange((v) => {
             s.warnTrustFields = v;
