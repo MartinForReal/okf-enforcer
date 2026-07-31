@@ -1168,7 +1168,7 @@ function validateTrustFamilies(data: Record<string, unknown>): OkfIssue[] {
     }
   }
 
-  // `stale_after` (§5.5): an absolute YYYY-MM-DD date.
+  // `stale_after` (§5.5): an absolute YYYY-MM-DD date, and a review deadline.
   if ("stale_after" in data && data["stale_after"] != null) {
     const s = String(data["stale_after"]).slice(0, 10);
     if (!ISO_DATE_RE.test(s)) {
@@ -1176,6 +1176,12 @@ function validateTrustFamilies(data: Record<string, unknown>): OkfIssue[] {
         severity: "warning",
         rule: "§5.5",
         message: "`stale_after` should be an absolute date (`YYYY-MM-DD`).",
+      });
+    } else if (isStale(data)) {
+      issues.push({
+        severity: "warning",
+        rule: "§5.5",
+        message: `\`stale_after\` (${s}) has passed; this concept is due for review.`,
       });
     }
   }
