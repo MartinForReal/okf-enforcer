@@ -6,8 +6,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Three §5 trust signals that the 0.3.0 notes and README described as shipped were
-either not surfaced or not checked. All three now do what the docs said.
+Three §5 trust signals that didn't do what they promised. The derived trust tier
+and `sources[].author` were described as shipped in the 0.3.0 notes and the
+README but were never surfaced or checked; `stale_after` was validated for its
+form only, so a review deadline could pass unnoticed.
 
 ### Added
 - **`stale_after` is enforced, not just parsed** ([#10](https://github.com/MartinForReal/okf-enforcer/issues/10)).
@@ -440,8 +442,13 @@ Initial release.
 - Batched, non-blocking scan/fix queue with an inline progress bar for large vaults.
 - Settings for automation toggles, batch size, warning rules, and excluded folders.
 
+[Unreleased]: https://github.com/MartinForReal/okf-enforcer/compare/0.4.1...HEAD
+[0.4.1]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.4.1
 [0.4.0]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.4.0
 [0.3.0]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.3.0
+[0.2.2]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.2.2
+[0.2.1]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.2.1
+[0.2.0]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.2.0
 [0.1.3]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.1.3
 [0.1.2]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.1.2
 [0.1.1]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.1.1
