@@ -4,6 +4,15 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-07-31
+
+### Changed
+- Re-release of 0.4.0 under a fresh tag. The `0.4.0` release was published
+  before CI could attach `main.js`, `manifest.json`, and `styles.css`, so it
+  briefly carried no assets and was reported as an incomplete release. The
+  assets were restored afterward, but downstream caches may have pinned the
+  original, so this tag supersedes it. No code changes since 0.4.0.
+
 ## [0.4.0] - 2026-07-30
 
 Index generation follows [#8](https://github.com/MartinForReal/okf-enforcer/issues/8):
