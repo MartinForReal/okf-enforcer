@@ -1213,6 +1213,16 @@ function validateTrustFamilies(data: Record<string, unknown>): OkfIssue[] {
             message: `\`sources[${i}]\` is missing the required \`resource\`.`,
           });
         }
+        if (
+          "author" in e &&
+          (typeof e["author"] !== "string" || e["author"].trim().length === 0)
+        ) {
+          issues.push({
+            severity: "warning",
+            rule: "§5.1",
+            message: `\`sources[${i}].author\` should be a non-empty string.`,
+          });
+        }
         if ("usage_count" in e && typeof e["usage_count"] !== "number") {
           issues.push({
             severity: "warning",
