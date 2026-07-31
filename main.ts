@@ -21,10 +21,13 @@ import {
   basename,
   parentPath,
   oneLine,
+  encodeLink,
   sectionBlock,
   sectionSummary,
   mergeIndex,
   renderIndex,
+  sectionForType,
+  INDEX_SECTIONS,
   type IndexEntry,
   OkfIssue,
   OKF_VERSION,
@@ -217,11 +220,26 @@ export default class OkfPlugin extends Plugin {
       this.layoutReady = true;
       // The panel is hidden by default simply because we never auto-open it;
       // we do not detach existing leaves, so a user-positioned view is preserved.
-      if (this.settings.scanOnStartup) {
-        // Silent: update the status bar/tooltip only, never open the panel.
-        window.setTimeout(() => { void this.scanVault(false, true); }, 1500);
-      }
+      window.setTimeout(() => { void this.startupPass(); }, 1500);
     });
+  }
+
+  /**
+   * The startup work, once the workspace has settled: bring the indexes up to
+   * date, then scan. Both are opt-out/opt-in toggles, and either may be off.
+   *
+   * Indexes go first because a scan validates `index.md` against §8, and a
+   * stale listing the pass is about to rewrite shouldn't be reported as a
+   * finding the user then has to look at. They run one after the other rather
+   * than together because each takes `this.busy` for the duration, so
+   * overlapping them would mean one silently doing nothing.
+   */
+  private async startupPass(): Promise<void> {
+    if (this.settings.autoGenerateIndex && this.settings.generateIndexOnStartup) {
+      await this.generateAllIndexes(true);
+    }
+    // Silent: update the status bar/tooltip only, never open the panel.
+    if (this.settings.scanOnStartup) await this.scanVault(false, true);
   }
 
   onunload() {
@@ -661,28 +679,48 @@ export default class OkfPlugin extends Plugin {
         : sectionBlock(current, this.settings.indexSubdirDescSection);
 
     const children = folder.children;
-    const concepts: IndexEntry[] = [];
+    // Notes are grouped by their `type`, so the listing says what the directory
+    // holds. Keyed by the heading rather than the raw type, which folds
+    // `concept` and `Concept` into one section.
+    const byType = new Map<string, IndexEntry[]>();
     const subdirs: IndexEntry[] = [];
+    const files: IndexEntry[] = [];
 
     for (const child of children) {
       if (child instanceof TFile) {
-        if (child.extension !== "md") continue;
         if (isReserved(child.path)) continue;
+        if (child.extension !== "md") {
+          // An attachment is part of what the directory holds, so §8 lists it —
+          // under its own heading, since it carries no frontmatter to be
+          // described or typed by. Without this a folder of nothing but images
+          // would render an index that claims the folder is empty.
+          files.push({
+            section: INDEX_SECTIONS.files,
+            link: encodeLink(child.name),
+            title: child.name,
+            desc: "",
+          });
+          continue;
+        }
         const fm: Record<string, unknown> =
           this.app.metadataCache.getFileCache(child)?.frontmatter ?? {};
         const fmTitle = fm["title"];
         const fmDesc = fm["description"];
-        const title =
-          typeof fmTitle === "string" && fmTitle.length > 0
-            ? fmTitle
-            : basename(child.path);
+        // A title lands inside a one-line `* [Title](link)` bullet, so it gets
+        // the same collapsing and clipping the description already gets.
+        const fmTitleText = typeof fmTitle === "string" ? oneLine(fmTitle) : "";
+        const title = fmTitleText || basename(child.path);
         const desc = typeof fmDesc === "string" ? oneLine(fmDesc) : "";
-        concepts.push({
-          section: "Concepts",
-          link: encodeURI(child.name),
+        const section = sectionForType(fm["type"]);
+        const bucket = byType.get(section);
+        const entry: IndexEntry = {
+          section,
+          link: encodeLink(child.name),
           title,
           desc,
-        });
+        };
+        if (bucket) bucket.push(entry);
+        else byType.set(section, [entry]);
       } else if (child instanceof TFolder) {
         // A subdirectory's document is its own index.md, so that is what the
         // entry links at. A bare `folder/` link resolves to a note that doesn't
@@ -709,8 +747,8 @@ export default class OkfPlugin extends Plugin {
           );
         }
         subdirs.push({
-          section: "Subdirectories",
-          link: `${encodeURI(child.name)}/index.md`,
+          section: INDEX_SECTIONS.subdirs,
+          link: `${encodeLink(child.name)}/index.md`,
           title: child.name,
           desc:
             childIndex instanceof TFile
@@ -720,12 +758,34 @@ export default class OkfPlugin extends Plugin {
       }
     }
 
-    const entries = [...subdirs, ...concepts];
+    // Subdirectories first — they're the branches of the tree — then one
+    // section per type in alphabetical order, so the same folder renders the
+    // same way whatever order Obsidian happens to hand its children over in.
+    // What the plugin couldn't type, and what isn't a note at all, goes last.
+    const groups: [string, IndexEntry[]][] = [
+      [INDEX_SECTIONS.subdirs, subdirs],
+      ...[...byType.entries()]
+        .filter(([section]) => section !== INDEX_SECTIONS.untyped)
+        .sort(([a], [b]) => a.localeCompare(b)),
+      [INDEX_SECTIONS.untyped, byType.get(INDEX_SECTIONS.untyped) ?? []],
+      [INDEX_SECTIONS.files, files],
+    ];
+    // Two groups can land on one heading: `type: File` pluralises onto the same
+    // `Files` the attachments use, and `Note` and `note` differ only in case,
+    // which is how §8 headings are matched anyway. Folding them keeps a heading
+    // from being written twice, under the spelling that got there first.
+    const sections = new Map<string, IndexEntry[]>();
+    for (const [section, group] of groups) {
+      if (group.length === 0) continue;
+      const at = sections.get(section.toLowerCase());
+      if (!at) sections.set(section.toLowerCase(), [...group]);
+      else for (const e of group) at.push({ ...e, section: at[0].section });
+    }
+    const entries = [...sections.values()].flat();
     // §8 makes an index optional, but a folder that has one is navigable and a
     // folder that doesn't is a dead end in its parent's listing. So every
-    // folder gets one, including an empty and a newly created folder — the
-    // listing simply says it has nothing yet, and the placeholder gives way to
-    // the first real entry.
+    // folder gets one, including an empty and a newly created folder — there is
+    // simply nothing in it to list, and the first entry fills it in.
     const maintaining = current !== null && !this.settings.overwriteExistingIndex;
 
     let out: string;
@@ -805,9 +865,9 @@ export default class OkfPlugin extends Plugin {
     return false;
   }
 
-  async generateAllIndexes() {
+  async generateAllIndexes(silent = false) {
     if (this.busy) {
-      new Notice("OKF: a scan/fix is already running…");
+      if (!silent) new Notice("OKF: a scan/fix is already running…");
       return;
     }
     this.busy = true;
@@ -836,9 +896,14 @@ export default class OkfPlugin extends Plugin {
         },
         "OKF: building indexes"
       );
-      new Notice(
-        `OKF: updated index.md in ${written} of ${list.length} folder(s).`
-      );
+      // A silent pass still reports through the progress bar while it runs —
+      // unlike a scan, this writes to the vault, and that shouldn't happen with
+      // no sign of it — but it doesn't interrupt with a notice at the end.
+      if (!silent) {
+        new Notice(
+          `OKF: updated index.md in ${written} of ${list.length} folder(s).`
+        );
+      }
     } finally {
       this.busy = false;
     }
@@ -959,14 +1024,14 @@ class OkfSettingTab extends PluginSettingTab {
         control: (row) =>
           row.addText((t) =>
             t.setValue(s.defaultType).onChange((v) => {
-              s.defaultType = v || "Concept";
+              s.defaultType = v.trim() || "Concept";
               save();
             })
           ),
       },
       {
         name: "Default actor for `generated.by`",
-        desc: "Actor written when auto-fix adds a `generated` block (§7). Use `<producer>/<version>` (e.g. `okf-enforcer/0.4`) or `human:<id>`.",
+        desc: "Actor written when auto-fix adds a `generated` block (§7). Use `<producer>/<version>` (e.g. `okf-enforcer/0.4`) or `human:<id>`. Avoid commas — the block is written as inline YAML.",
         control: (row) =>
           row.addText((t) =>
             t.setValue(s.defaultActor).onChange((v) => {
@@ -989,7 +1054,7 @@ class OkfSettingTab extends PluginSettingTab {
       { name: "Automation", heading: true },
       {
         name: "Scan vault on startup",
-        desc: "Run a full conformance scan automatically when the plugin loads (deferred until the workspace is ready).",
+        desc: "Scan the whole vault for conformance when the plugin loads, once the workspace is ready.",
         control: (row) =>
           row.addToggle((tg) =>
             tg.setValue(s.scanOnStartup).onChange((v) => {
@@ -1000,7 +1065,7 @@ class OkfSettingTab extends PluginSettingTab {
       },
       {
         name: "Fix format issues on save",
-        desc: "When you edit a note, auto-insert missing OKF frontmatter (type/title/generated). Non-destructive; never overwrites existing values.",
+        desc: "Insert missing OKF frontmatter (`type`, `title`, `generated`) when you edit a note. Never overwrites a value you've set.",
         control: (row) =>
           row.addToggle((tg) =>
             tg.setValue(s.fixOnSave).onChange((v) => {
@@ -1010,8 +1075,20 @@ class OkfSettingTab extends PluginSettingTab {
           ),
       },
       {
+        name: "Auto-migrate to latest OKF on fix",
+        desc: "Let auto-fix also upgrade notes to the latest OKF version — `timestamp` → `generated`, `# Citations` → `sources`. Off leaves this to the \"Migrate note to latest OKF\" command, since a migration rewrites what you wrote.",
+        control: (row) =>
+          row.addToggle((tg) =>
+            tg.setValue(s.autoMigrateOnFix).onChange((v) => {
+              s.autoMigrateOnFix = v;
+              save();
+            })
+          ),
+      },
+      { name: "index.md", heading: true },
+      {
         name: "Auto-generate index.md",
-        desc: "Keep a folder's index.md (§8 listing) up to date as its notes are added, renamed, and deleted, along with every listing above it — a parent describes its subdirectories by what they hold. Every folder gets one, including an empty and a newly created folder, so no listing points at a file that isn't there; the config folder and anything under \"Excluded folders\" are left alone. An existing index has missing entries added, wrong links corrected, and entries for deleted notes removed, or is rebuilt if \"Rebuild existing index.md\" is on.",
+        desc: "Keep every folder's index.md (its §8 listing) current as notes are added, renamed, and deleted — including the listings above it, since a parent describes its subfolders by what they hold. Every folder gets an index, an empty one included; the config folder and \"Excluded folders\" are left alone.",
         control: (row) =>
           row.addToggle((tg) =>
             tg.setValue(s.autoGenerateIndex).onChange((v) => {
@@ -1021,8 +1098,19 @@ class OkfSettingTab extends PluginSettingTab {
           ),
       },
       {
+        name: "Generate index.md on startup",
+        desc: "Bring every index up to date once when the plugin loads, for what changed while Obsidian was closed — a vault synced from another machine, or edited outside it. Runs quietly, before the startup scan. Off by default; needs \"Auto-generate index.md\" on.",
+        control: (row) =>
+          row.addToggle((tg) =>
+            tg.setValue(s.generateIndexOnStartup).onChange((v) => {
+              s.generateIndexOnStartup = v;
+              save();
+            })
+          ),
+      },
+      {
         name: "Rebuild existing index.md",
-        desc: "Off (default): generating an index adds the entries it doesn't already list, corrects a link that points at the wrong path, and drops one whose note this folder no longer holds, leaving your prose, ordering, titles, and edited descriptions untouched. On: the listing is rewritten from the folder's contents, which also refreshes every description and re-sorts the entries.",
+        desc: "Off (default): generating an index adds what it doesn't already list, corrects a link pointing at the wrong path, and drops an entry whose note is gone, leaving your prose, ordering, titles, and descriptions alone. On: the listing is rewritten from the folder's contents, which refreshes every description and re-groups entries under their current `type` — but discards any prose you added, apart from the section named below.",
         control: (row) =>
           row.addToggle((tg) =>
             tg.setValue(s.overwriteExistingIndex).onChange((v) => {
@@ -1033,7 +1121,7 @@ class OkfSettingTab extends PluginSettingTab {
       },
       {
         name: "Subdirectory description section",
-        desc: "Heading in a subfolder's index.md whose first paragraph becomes that folder's description in the parent listing (e.g. `Purpose`). The section is preserved when that index is regenerated, so what you write there survives a refresh. Leave blank for no subdirectory descriptions. Subdirectory entries always link at the folder's own index.md.",
+        desc: "Heading in a subfolder's index.md whose first paragraph becomes that folder's description in the parent listing (e.g. `Purpose`). This is the one section a rebuild carries over. Blank leaves subfolder entries undescribed.",
         control: (row) =>
           row.addText((t) =>
             t
@@ -1045,33 +1133,10 @@ class OkfSettingTab extends PluginSettingTab {
               })
           ),
       },
-      {
-        name: "Auto-migrate to latest OKF on fix",
-        desc: "Let auto-fix (and fix-on-save) also upgrade notes to the latest OKF version — e.g. rewrite legacy `timestamp` → `generated` and lift `# Citations` → `sources`. On by default. Turn off to keep migrations manual via the \"Migrate note to latest OKF\" command, since they rewrite existing content.",
-        control: (row) =>
-          row.addToggle((tg) =>
-            tg.setValue(s.autoMigrateOnFix).onChange((v) => {
-              s.autoMigrateOnFix = v;
-              save();
-            })
-          ),
-      },
-      {
-        name: "Batch size",
-        desc: "Files processed per async chunk during scan/fix. Lower = smoother UI on large vaults; higher = faster.",
-        control: (row) =>
-          row.addText((t) =>
-            t.setValue(String(s.batchSize)).onChange((v) => {
-              const n = parseInt(v, 10);
-              s.batchSize = isNaN(n) || n < 1 ? 50 : Math.min(n, 1000);
-              save();
-            })
-          ),
-      },
       { name: "Rules", heading: true },
       {
         name: "Warn on missing recommended fields",
-        desc: "title, description, generated (§4.1, §5.2).",
+        desc: "Warn when `title`, `description`, or `generated` is missing (§4.1, §5.2).",
         control: (row) =>
           row.addToggle((tg) =>
             tg.setValue(s.warnRecommendedFields).onChange((v) => {
@@ -1081,8 +1146,19 @@ class OkfSettingTab extends PluginSettingTab {
           ),
       },
       {
+        name: "Warn on missing tags",
+        desc: "Warn when a note has no `tags`. Off by default — the spec doesn't ask for them.",
+        control: (row) =>
+          row.addToggle((tg) =>
+            tg.setValue(s.warnTagsField).onChange((v) => {
+              s.warnTagsField = v;
+              save();
+            })
+          ),
+      },
+      {
         name: "Validate trust & lifecycle fields",
-        desc: "When present, check the v0.2 families: `verified` shape + actors, `status` vocabulary, `stale_after` date, and `sources` (§5). Advisory — off by default.",
+        desc: "Check the v0.2 trust fields on notes that carry them: `verified`, `status`, `stale_after`, `sources` (§5). Advisory; off by default.",
         control: (row) =>
           row.addToggle((tg) =>
             tg.setValue(s.warnTrustFields).onChange((v) => {
@@ -1102,19 +1178,10 @@ class OkfSettingTab extends PluginSettingTab {
             })
           ),
       },
-      {
-        name: "Warn on missing tags",
-        control: (row) =>
-          row.addToggle((tg) =>
-            tg.setValue(s.warnTagsField).onChange((v) => {
-              s.warnTagsField = v;
-              save();
-            })
-          ),
-      },
+      { name: "Scope & performance", heading: true },
       {
         name: "Excluded folders",
-        desc: "Comma-separated paths skipped during validation and index generation. Use this for attachment folders you'd rather not have an index.md in.",
+        desc: "Comma-separated paths skipped by validation and index generation — use it for an attachments folder you'd rather not have an index.md in. The config folder is always skipped.",
         control: (row) =>
           row.addText((t) =>
             t.setValue(s.excludeFolders.join(", ")).onChange((v) => {
@@ -1123,10 +1190,22 @@ class OkfSettingTab extends PluginSettingTab {
             })
           ),
       },
+      {
+        name: "Batch size",
+        desc: "Files processed per async chunk during scan/fix. Lower = smoother UI on large vaults; higher = faster.",
+        control: (row) =>
+          row.addText((t) =>
+            t.setValue(String(s.batchSize)).onChange((v) => {
+              const n = parseInt(v, 10);
+              s.batchSize = isNaN(n) || n < 1 ? 50 : Math.min(n, 1000);
+              save();
+            })
+          ),
+      },
       { name: "Portent", heading: true },
       {
         name: "Enable Portent validation",
-        desc: "Experimental (beta) — the Portent spec is pre-1.0 and may still change. Additionally validate notes against the Portent spec (portent.md): default type vocabulary (Project, Operation, Responsibility, Task, Event, Note, Topic, Person), lifecycle metadata (optional and format-free; status / organized / archived, or omitted when organized by default), and relationship shape (belongs_to, related_to as wikilinks). All Portent findings are warnings — they never block OKF conformance.",
+        desc: "Also check notes against the Portent spec (portent.md) — its type vocabulary, lifecycle, and `belongs_to`/`related_to` links. Findings are always warnings and never block OKF conformance. Experimental: Portent is pre-1.0 and may still change.",
         control: (row) =>
           row.addToggle((tg) =>
             tg.setValue(s.enablePortent).onChange((v) => {
@@ -1139,7 +1218,7 @@ class OkfSettingTab extends PluginSettingTab {
       },
       {
         name: "Validate type vocabulary",
-        desc: "Warn when `type` is not one of the configured Portent types. Turn off if you use your own type names.",
+        desc: "Warn when `type` isn't one of the accepted values set under Portent schema.",
         portentDependent: true,
         control: (row) =>
           row.addToggle((tg) =>
@@ -1151,7 +1230,7 @@ class OkfSettingTab extends PluginSettingTab {
       },
       {
         name: "Validate lifecycle",
-        desc: "Check lifecycle values when present (status maps to the configured set; `organized`/`archived` are booleans). A missing lifecycle is never flagged.",
+        desc: "Check lifecycle values on notes that carry them. A note with no lifecycle is never flagged.",
         portentDependent: true,
         control: (row) =>
           row.addToggle((tg) =>
@@ -1163,7 +1242,7 @@ class OkfSettingTab extends PluginSettingTab {
       },
       {
         name: "Validate belongs_to",
-        desc: "Check `belongs_to` shape when present (a single wikilink to the primary parent).",
+        desc: "Check `belongs_to` when present — a single wikilink to the primary parent.",
         portentDependent: true,
         control: (row) =>
           row.addToggle((tg) =>
@@ -1175,7 +1254,7 @@ class OkfSettingTab extends PluginSettingTab {
       },
       {
         name: "Validate related_to",
-        desc: "Check `related_to` shape when present (a list of wikilinks).",
+        desc: "Check `related_to` when present — a list of wikilinks.",
         portentDependent: true,
         control: (row) =>
           row.addToggle((tg) =>
@@ -1187,7 +1266,7 @@ class OkfSettingTab extends PluginSettingTab {
       },
       {
         name: "Portent schema",
-        desc: "Customize the frontmatter keys and vocabularies Portent checks — track your own conventions or a future spec revision without a plugin update. Leave a field blank to restore its default.",
+        desc: "Rename the frontmatter keys and redefine the vocabularies Portent checks, to match your own conventions or a future spec revision. Leave a field blank to restore its default.",
         heading: true,
         portentDependent: true,
       },

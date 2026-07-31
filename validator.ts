@@ -78,6 +78,15 @@ export interface OkfSettings extends PortentSettings {
   fixOnSave: boolean;
   autoGenerateIndex: boolean;
   /**
+   * Bring every folder's `index.md` up to date once, when the plugin loads.
+   * Off by default: the on-create/rename/delete hooks already keep listings
+   * current while the plugin is running, so this is for what changed while it
+   * wasn't — a vault synced from another machine, or edited outside Obsidian —
+   * and it writes across the whole vault, which is not something to do to
+   * someone's notes unasked.
+   */
+  generateIndexOnStartup: boolean;
+  /**
    * Rebuild an existing `index.md` from scratch instead of adding to it (§8).
    * Off by default: generation appends the entries a listing is missing and
    * leaves prose, ordering, and hand-edited descriptions alone. On, the listing
@@ -115,6 +124,7 @@ export const DEFAULT_SETTINGS: OkfSettings = {
   scanOnStartup: true,
   fixOnSave: true,
   autoGenerateIndex: true,
+  generateIndexOnStartup: false,
   overwriteExistingIndex: false,
   indexSubdirDescSection: "",
   autoMigrateOnFix: true,
@@ -276,18 +286,207 @@ export interface IndexEntry {
   desc: string;
 }
 
+/**
+ * Link text with its brackets escaped, so a title can't close the link it sits
+ * in: a note titled `See](elsewhere.md) this` would otherwise render an entry
+ * pointing somewhere the folder never named.
+ */
+function escapeLinkText(text: string): string {
+  return text.replace(/([\\[\]])/g, "\\$1");
+}
+
+/**
+ * A file name as a link destination. `encodeURI` leaves the reserved delimiters
+ * alone, and every one of them changes how the destination reads: an unescaped
+ * `(` in `report (1).pdf` ends the destination early, and an unescaped `#` in
+ * `Meeting #3.md` starts a fragment, so Obsidian looks for a note called
+ * `Meeting ` — the plugin has to be able to re-read the entries it writes, and
+ * so does the reader.
+ */
+export function encodeLink(name: string): string {
+  return encodeURI(name)
+    .replace(/\(/g, "%28")
+    .replace(/\)/g, "%29")
+    .replace(/#/g, "%23")
+    .replace(/\?/g, "%3F");
+}
+
 /** The §8 entry shape: `* [Title](link) - description`. */
 export function renderEntry(e: IndexEntry): string {
-  return `* [${e.title}](${e.link})${e.desc ? ` - ${e.desc}` : ""}`;
+  return `* [${escapeLinkText(e.title)}](${e.link})${e.desc ? ` - ${e.desc}` : ""}`;
+}
+
+/**
+ * The §8 sections that no `type` names: subdirectories, notes whose `type` is
+ * missing or unusable (§11 reports those separately — the listing just doesn't
+ * pretend to know what they are), and files that aren't notes at all.
+ */
+export const INDEX_SECTIONS = {
+  subdirs: "Subdirectories",
+  untyped: "Untyped",
+  files: "Files",
+} as const;
+
+/** Plurals the suffix rules below get wrong. */
+const IRREGULAR_PLURALS: Record<string, string> = {
+  person: "people",
+  child: "children",
+};
+
+/** The plural of a single word, for use as a section heading. */
+function pluralize(word: string): string {
+  const lower = word.toLowerCase();
+  const irregular = IRREGULAR_PLURALS[lower];
+  if (irregular) {
+    // Keep whatever capitalisation the author used for the first letter.
+    return word[0] === lower[0]
+      ? irregular
+      : irregular[0].toUpperCase() + irregular.slice(1);
+  }
+  // `Analysis` → `Analyses`, not `Analysises`.
+  if (/[a-z]{2}is$/i.test(word)) return word.slice(0, -2) + "es";
+  // Already plural — `Notes` stays `Notes`. `Process`, `Status` and `Analysis`
+  // only look plural, so they're excluded and pluralised below.
+  if (/[^su]s$/i.test(word)) return word;
+  if (/[^aeiou]y$/i.test(word)) return word.slice(0, -1) + "ies";
+  if (/(s|x|z|ch|sh)$/i.test(word)) return word + "es";
+  return word + "s";
+}
+
+/**
+ * Capitalises a word written entirely in lower case, and leaves any other one
+ * alone: `wiki` heads a `Wikis` section, while `API` keeps its capitals rather
+ * than being flattened to `Api`.
+ */
+function headingCase(word: string): string {
+  return word === word.toLowerCase()
+    ? word.charAt(0).toUpperCase() + word.slice(1)
+    : word;
+}
+
+/**
+ * Section heading for the notes of one `type` — `Concept` → `Concepts`,
+ * `Attested Computation` → `Attested Computations`. Grouping by type is what
+ * makes a listing say what a directory holds rather than only that it holds
+ * something, which is the progressive disclosure §8 is after.
+ *
+ * Only the last word is pluralised. A heading is prose, so a lower-case `type`
+ * is capitalised for it, but a word the author already capitalised is left as
+ * written — an acronym stays an acronym. A type that is missing or says nothing
+ * usable gets the `Untyped` section rather than being silently filed under
+ * `Concepts`.
+ */
+export function sectionForType(type: unknown): string {
+  if (typeof type !== "string") return INDEX_SECTIONS.untyped;
+  // A heading is one line, so a `type` carrying newlines or its own `#` can't
+  // be pasted in raw.
+  const t = oneLine(type, 80).replace(/^#+\s*/, "").trim();
+  if (!t) return INDEX_SECTIONS.untyped;
+  const words = t.split(/\s+/).map(headingCase);
+  words[words.length - 1] = pluralize(words[words.length - 1]);
+  return words.join(" ");
 }
 
 const BULLET_RE = /^\s*[*\-+]\s+\S/;
-// Split so a destination can be replaced in place: everything up to the opening
-// paren, then the destination itself. It runs to the closing paren rather than
-// the first space, since a hand-written entry may link at `my notes/` with the
-// space left unescaped.
-const BULLET_LINK_RE = /^(\s*[*\-+]\s+\[[^\]]*\]\()([^)]*)\)/;
+const BULLET_MARKER_RE = /^(\s*[*\-+]\s+)/;
+// An ordered list is the other shape a hand-authored index is commonly written
+// in. Recognized so its entries aren't listed a second time, never rewritten.
+const LIST_MARKER_RE = /^(\s*(?:[*\-+]|\d{1,9}[.)])\s+)/;
+const ORDINAL_RE = /^\s*(\d{1,9})[.)]\s/;
 const PLACEHOLDER_RE = /^\s*_No .+ yet\._\s*$/;
+// `[[note]]`, `[[note|Alias]]`, `[[note#heading]]`, `[[note#^block]]` — read
+// only, never written. Obsidian's own link syntax is what a hand-authored index
+// is most likely to be written in. An embed (`![[x]]`) is deliberately not
+// matched: it displays a file rather than linking to one, so it doesn't stand in
+// for the entry §8 asks for, and the embed itself is still left as written.
+const BULLET_WIKILINK_RE = /^\s*(?:[*\-+]|\d{1,9}[.)])\s+\[\[([^\]|#^]*)/;
+
+/** A `* [Title](dest)` entry, split so its destination can be replaced in place. */
+interface BulletLink {
+  /** Everything up to and including the `(` that opens the destination. */
+  prefix: string;
+  /** The destination exactly as written, between the parens. */
+  dest: string;
+  /** The closing paren and everything after it — usually ` - description`. */
+  suffix: string;
+  /** Whether the marker is a numbered one, which is the author's to keep. */
+  ordered: boolean;
+  /**
+   * The destination of a link nested inside the title, when there is one.
+   * CommonMark forbids a link inside a link, so in `[a [b](x) c](y)` only `x`
+   * renders — `dest` is what this plugin would rewrite, `nested` is what the
+   * reader actually clicks.
+   */
+  nested?: string;
+}
+
+/**
+ * The paren-delimited destination starting at `open`, with parens balanced so a
+ * file name may hold them, or null when the parens never close.
+ */
+function readDest(line: string, open: number): { dest: string; end: number } | null {
+  let j = open;
+  for (let depth = 1; j < line.length; j++) {
+    const c = line[j];
+    if (c === "\\") j++;
+    else if (c === "(") depth++;
+    else if (c === ")" && --depth === 0) break;
+  }
+  return line[j] === ")" ? { dest: line.slice(open, j), end: j } : null;
+}
+
+/**
+ * The link a bullet entry opens with, or null when it doesn't open with one.
+ *
+ * Scanned rather than matched with one pattern because both halves nest: a
+ * title may hold brackets (`Rev [2]`) and a destination may hold parens
+ * (`report (1).pdf`). A pattern that stops at the first `]` or `)` fails on the
+ * very line `renderEntry` wrote, and an entry that can't be read back is
+ * appended again on every pass. Only the link the entry *starts* with is
+ * parsed, so a markdown link written inside a description is never mistaken for
+ * the entry's own.
+ */
+function parseBulletLink(line: string): BulletLink | null {
+  const marker = line.match(LIST_MARKER_RE);
+  if (!marker || line[marker[0].length] !== "[") return null;
+
+  const start = marker[0].length + 1;
+  let nested: string | undefined;
+  let i = start;
+  for (let depth = 1; i < line.length; i++) {
+    const c = line[i];
+    if (c === "\\") i++;
+    else if (c === "[") depth++;
+    else if (c === "]") {
+      if (depth > 1 && nested === undefined && line[i + 1] === "(") {
+        nested = readDest(line, i + 2)?.dest;
+      }
+      if (--depth === 0) break;
+    }
+  }
+  if (line[i] !== "]" || line[i + 1] !== "(") {
+    // A title left holding an unmatched `[` never balances — and that is exactly
+    // what this plugin wrote before titles were escaped. Fall back to the
+    // reading the old pattern gave such a line, so an index already on disk is
+    // recognized rather than listed a second time.
+    const first = line.indexOf("]", start);
+    if (first < 0 || line[first + 1] !== "(") return null;
+    i = first;
+    nested = undefined;
+  }
+
+  const open = i + 2;
+  const dest = readDest(line, open);
+  if (!dest) return null;
+
+  return {
+    prefix: line.slice(0, open),
+    dest: dest.dest,
+    suffix: line.slice(dest.end),
+    ordered: !BULLET_MARKER_RE.test(marker[0]),
+    nested,
+  };
+}
 
 /**
  * A markdown destination split into what it points at and any trailing link
@@ -305,43 +504,102 @@ function splitDest(dest: string): { target: string; trailer: string } {
     : { target: rest.slice(0, title), trailer: rest.slice(title) };
 }
 
-/** A target with its escapes resolved, so `my%20notes` and `my notes` compare equal. */
+/**
+ * A target with its escapes resolved, so `my%20notes` and `my notes` compare
+ * equal. `decodeURI` deliberately preserves the reserved delimiters it would
+ * change the meaning of, so `%23`/`%3F` are folded back by hand — otherwise the
+ * link `encodeLink` writes for `Meeting #3.md` never compares equal to the one
+ * an author typed, and the note is listed twice.
+ */
 function decodePath(target: string): string {
   const t = target.replace(/^\.\//, "");
+  // Folded before `decodeURI`, not after: decoding turns `%25` into a literal
+  // `%`, so folding afterwards would read the `%23` that surfaces in
+  // `a%2523b.md` — a file whose name really does hold the three characters
+  // `%23` — as an escaped `#`, and the entry would be pruned as missing.
+  const literal = (s: string) => s.replace(/%23/gi, "#").replace(/%3F/gi, "?");
   try {
-    return decodeURI(t);
+    return decodeURI(literal(t));
   } catch {
     // A malformed escape is compared as written rather than dropped.
-    return t;
+    return literal(t);
   }
+}
+
+/**
+ * A destination split from the `#fragment` or `?query` trailing it. Linking at
+ * a heading in a sibling note — `paxos.md#simple` — is idiomatic in Obsidian,
+ * and it names the same note `paxos.md` does. Asking the vault for the whole
+ * string finds nothing, which would read as a note that had been deleted.
+ *
+ * Only a separator with something before it splits. A destination that *starts*
+ * with one is either a same-document anchor (`#top`) or a file whose name starts
+ * with `#`; either way the whole string is what identifies it, and collapsing it
+ * to `""` would put every such destination on one key.
+ */
+function splitFragment(target: string): { path: string; fragment: string } {
+  const at = target.slice(1).search(/[#?]/);
+  return at < 0
+    ? { path: target, fragment: "" }
+    : { path: target.slice(0, at + 1), fragment: target.slice(at + 1) };
 }
 
 /** Whether two destinations resolve to the same file — `./a.md` and `a.md` do. */
 function sameTarget(a: string, b: string): boolean {
-  return decodePath(a) === decodePath(b);
+  return decodePath(splitFragment(a).path) === decodePath(splitFragment(b).path);
 }
 
 /**
- * A link reduced to what identifies the thing it points at, so a folder listed
+ * A path reduced to what identifies the thing it points at, so a folder listed
  * as `notes/` and the same folder rendered as `notes/index.md` are recognized
  * as one entry rather than appended twice.
  */
-function linkKey(dest: string): string {
-  return decodePath(splitDest(dest).target)
+function pathKey(path: string): string {
+  return decodePath(path)
     .replace(/\/index\.md$/i, "")
     .replace(/\/+$/, "")
     .toLowerCase();
 }
 
+/** The same, for a whole destination — title trailer and fragment removed. */
+function linkKey(dest: string): string {
+  return pathKey(splitFragment(splitDest(dest).target).path);
+}
+
+/**
+ * The one key a wikilink target is listing. Obsidian writes `[[note]]` for
+ * `note.md`, so the extension a generated entry carries has to be added or the
+ * two never line up and the note is listed twice.
+ *
+ * Exactly one key, never both spellings: a subdirectory's entry keys as `alpha`
+ * once `/index.md` is stripped, so claiming the bare name as well would let a
+ * single `* [[alpha]]` silence both the note `alpha.md` and the folder
+ * `alpha/` — and a folder missing from its parent's listing is a dead end. A
+ * wikilink names a file, so the `.md` reading wins wherever the folder holds
+ * one; `[[alpha/index]]` still lands on the folder, because that is the file a
+ * subdirectory's entry points at.
+ */
+function wikilinkKeys(target: string, canonical: Map<string, string>): string[] {
+  const t = target.trim();
+  if (!t) return [];
+  // Keyed with `pathKey`, not `linkKey`: a wikilink target is not a markdown
+  // destination, so none of a destination's punctuation rules apply to it.
+  // `[[notes (draft)]]` names a file with brackets in it, and reading the
+  // ` (` as the start of a link title would key it as `notes` — silencing a
+  // sibling folder `notes/` that nothing else would then list.
+  if (/\.[a-z0-9]+$/i.test(t) || t.endsWith("/")) return [pathKey(t)];
+  const md = pathKey(`${t}.md`);
+  return canonical.has(md) ? [md] : [pathKey(t)];
+}
+
 /** The full listing for a folder, replacing whatever the index held before. */
 export function renderIndex(entries: IndexEntry[], keep = ""): string {
+  // A directory with nothing in it gets an empty index rather than a listing
+  // that describes emptiness: §8 asks an index to enumerate what a directory
+  // holds, and there is nothing to enumerate. The file is still written, so the
+  // entry naming it in the parent listing still points at something real.
+  if (entries.length === 0) return keep ? `${keep}\n` : "";
   let out = keep ? `${keep}\n\n` : "";
-  // A directory with nothing in it still gets a listing that says so, rather
-  // than no index at all. The placeholder is what a real entry replaces when
-  // the folder gains its first note (see `appendToSection`).
-  if (entries.length === 0) {
-    return `${out}# Concepts\n\n_No concepts yet._\n`;
-  }
   let section = "";
   for (const e of entries) {
     if (e.section !== section) {
@@ -354,6 +612,8 @@ export function renderIndex(entries: IndexEntry[], keep = ""): string {
   return out;
 }
 
+const FENCE_RE = /^\s{0,3}(`{3,}|~{3,})/;
+
 /**
  * Per-line flag marking fenced code blocks, including the fence markers. A
  * bullet in there is sample text — a root index that documents the format is
@@ -364,7 +624,7 @@ function fencedLines(lines: string[]): boolean[] {
   const mask: boolean[] = [];
   let fence = "";
   for (const line of lines) {
-    const open = line.match(/^\s{0,3}(`{3,}|~{3,})/);
+    const open = line.match(FENCE_RE);
     if (open) {
       if (!fence) fence = open[1][0];
       else if (open[1][0] === fence) fence = "";
@@ -374,6 +634,28 @@ function fencedLines(lines: string[]): boolean[] {
     mask.push(fence !== "");
   }
   return mask;
+}
+
+/**
+ * Whether an ordered marker on `lines[i]` opens a list rather than continuing
+ * the prose above it. CommonMark only lets an ordered list interrupt a
+ * paragraph when it starts at `1`, so a `2.` written straight under a line of
+ * prose is a lazy continuation of that paragraph: the link on it is part of a
+ * sentence, and reading it as an entry would leave the note it names listed by
+ * nothing at all. Inside a list the number is the author's to choose, so the
+ * scan only walks back as far as the paragraph a marker would have to
+ * interrupt.
+ */
+function ordinalOpensList(lines: string[], i: number): boolean {
+  const n = lines[i].match(ORDINAL_RE);
+  if (!n || n[1] === "1") return true;
+  for (let j = i - 1; j >= 0; j--) {
+    if (LIST_MARKER_RE.test(lines[j]) || /^\s{2,}\S/.test(lines[j])) return true;
+    // Directly above, a blank line or a heading means nothing is open for the
+    // marker to interrupt; further up, the lines between are that paragraph.
+    if (!lines[j].trim() || /^#{1,6}\s/.test(lines[j])) return j === i - 1;
+  }
+  return i === 0;
 }
 
 /**
@@ -430,17 +712,75 @@ export function mergeIndex(
       section = head[1].trim();
       continue;
     }
-    const m = lines[i].match(BULLET_LINK_RE);
-    if (!m) continue;
-    const key = linkKey(m[2]);
+    if (!ordinalOpensList(lines, i)) continue;
+    const link = parseBulletLink(lines[i]);
+    if (!link) {
+      // A wikilink entry is recognized but never rewritten or pruned: §8 asks
+      // for markdown links, and rewriting the syntax an author chose would be
+      // the same destructive move in a new coat. Counting it as already listed
+      // is what keeps a hand-authored index from being doubled on first
+      // contact with the plugin.
+      const wiki = lines[i].match(BULLET_WIKILINK_RE);
+      if (wiki) for (const key of wikilinkKeys(wiki[1], canonical)) listed.add(key);
+      continue;
+    }
+    const { target, trailer } = splitDest(link.dest);
+    const split = splitFragment(target);
+    // `#` and `?` are legal in a file name, so a destination holding one may be
+    // naming a fragment or may be naming a file. It is read as a fragment only
+    // where this folder is the authority on the answer — otherwise
+    // `research#2024/papers/paxos.md` collapses to `research`, which the folder
+    // looks to have held and lost, and a link that works is rewritten onto a
+    // sibling folder or dropped for a file that is still there.
+    const wholeKey = pathKey(target);
+    const splitKey = pathKey(split.path);
+    let names = false;
+    if (wholeKey !== splitKey) {
+      if (canonical.has(wholeKey) || !isOwnEntry(target)) {
+        // Either the folder holds exactly this, or the destination reaches past
+        // the folder: `research#2024/papers/paxos.md` is a cross-link deeper
+        // into the tree, not `research` with a fragment on it. Neither is this
+        // plugin's to correct or remove (§6.1), and reading the prefix as the
+        // entry's identity would rewrite a working link onto a sibling.
+        names = true;
+      } else {
+        // One segment, or `sub/index.md` — the folder's own business, so the
+        // vault is the authority on whether the separator is part of the name.
+        const alt = canonical.get(splitKey);
+        const risky =
+          alt === undefined ? !!exists && isOwnEntry(split.path) : !sameTarget(split.path, alt);
+        names = risky && !!exists && exists(decodePath(target).replace(/\/+$/, ""));
+      }
+    }
+    const targetPath = names ? target : split.path;
+    const fragment = names ? "" : split.fragment;
+    // A link nested in the title is what the reader actually clicks — CommonMark
+    // renders only the inner one — so that is the entry's key, and the line is
+    // otherwise left alone. Claiming the outer destination as well would mark a
+    // note listed that nothing in the file points at, and it would never appear.
+    if (link.nested !== undefined) {
+      listed.add(linkKey(link.nested));
+      continue;
+    }
+    const key = pathKey(targetPath);
     listed.add(key);
+    // A numbered marker is the author's too: §8's bullet is not worth rewriting
+    // their list to get, and an entry read this way is never pruned either.
+    if (link.ordered) continue;
     const want = canonical.get(key);
-    const { target, trailer } = splitDest(m[2]);
     if (want === undefined) {
       // Not in the listing this folder would generate. If it named a note the
       // folder held and that note is gone, the entry goes with it.
-      const path = decodePath(target).replace(/\/+$/, "");
-      if (exists && isOwnEntry(target) && !exists(path)) {
+      //
+      // Ownership is judged on the destination as written, never on the
+      // fragment-stripped one: `#` is legal in a folder name, so reading
+      // `research#2024/papers/paxos.md` as a fragment would turn a cross-link
+      // deeper into the tree into something that looks like a direct child this
+      // folder had lost, and destroy the entry for a file that is still there.
+      // The stripped path is only a second chance at resolving.
+      const whole = decodePath(target).replace(/\/+$/, "");
+      const path = decodePath(targetPath).replace(/\/+$/, "");
+      if (exists && isOwnEntry(target) && !exists(whole) && (path === whole || !exists(path))) {
         stale.push(i);
         emptied.add(section);
       }
@@ -448,10 +788,10 @@ export function mergeIndex(
     }
     // Right thing, wrong path — a subdirectory listed as `sub/` instead of
     // `sub/index.md`, which Obsidian turns into a new empty note when clicked.
-    // Only the destination is rewritten; the rest of the entry is the author's.
-    if (!sameTarget(target, want)) {
-      lines[i] =
-        m[1] + want + trailer + lines[i].slice(m[1].length + m[2].length);
+    // Only the destination is rewritten; the rest of the entry is the author's,
+    // the heading they linked at included.
+    if (!sameTarget(targetPath, want)) {
+      lines[i] = link.prefix + want + fragment + trailer + link.suffix;
       changed = true;
     }
   }
@@ -467,9 +807,16 @@ export function mergeIndex(
   }
   // A heading left with nothing under it by that pruning is a listing for a
   // section that no longer has anything in it. Prose the author wrote under the
-  // heading keeps it.
+  // heading keeps it, and so does the heading being one this plugin never
+  // generates: `# Reading list` is the author's even when the entry beneath it
+  // named a note that is gone. A type heading that has emptied out is left in
+  // place rather than removed, which is the conservative half of that trade.
+  const owned = new Set<string>(
+    Object.values(INDEX_SECTIONS).map((s) => s.toLowerCase())
+  );
+  for (const e of entries) owned.add(e.section.trim().toLowerCase());
   for (const name of emptied) {
-    if (!name) continue;
+    if (!name || !owned.has(name.trim().toLowerCase())) continue;
     const at = headingIndex(lines, name);
     if (at < 0) continue;
     let end = at + 1;
@@ -495,7 +842,44 @@ export function mergeIndex(
   if (!changed) return existing;
 
   while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+  // A frontmatter block ends at its closing `---` with no newline of its own,
+  // so a listing that starts on the body's first line would be glued to the
+  // fence — `---# Concepts`, which is a fixpoint no later pass repairs.
+  if (prefix && lines.length && lines[0].trim()) lines.unshift("", "");
+  // Pruning can empty a listing outright, which is what a folder whose last
+  // note was deleted should end up with — the same empty index a rebuild would
+  // write, not a lone newline.
+  if (lines.length === 0) return prefix ? prefix + eol : "";
   return prefix + lines.join(eol) + eol;
+}
+
+/** Whether a fence is still open when the document runs out of lines. */
+function fenceOpenAtEnd(lines: string[]): boolean {
+  let fence = "";
+  for (const line of lines) {
+    const open = line.match(FENCE_RE);
+    if (!open) continue;
+    if (!fence) fence = open[1][0];
+    else if (open[1][0] === fence) fence = "";
+  }
+  return fence !== "";
+}
+
+/**
+ * The last position a new line could take without landing inside a fenced
+ * block. A fence that never closes runs to the end of the file, so appending
+ * below it writes an entry the next pass reads as sample text and appends
+ * again — growth with no fixpoint, from nothing worse than a stray ``` in
+ * prose. Only that case moves the limit: a document whose fences all close
+ * ends at `lines.length` even when its very last line is a closing fence,
+ * which `fencedLines` marks as fenced along with the block it terminates.
+ */
+function writableEnd(lines: string[]): number {
+  if (!fenceOpenAtEnd(lines)) return lines.length;
+  const fenced = fencedLines(lines);
+  let end = lines.length;
+  while (end > 0 && fenced[end - 1]) end--;
+  return end;
 }
 
 /** Appends `items` to the end of `section`'s list, creating the section if absent. */
@@ -504,18 +888,24 @@ function appendToSection(
   section: string,
   items: string[]
 ): void {
-  const start = headingIndex(lines, section);
+  const limit = writableEnd(lines);
+  const start = headingIndex(lines.slice(0, limit), section);
   if (start < 0) {
-    while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
-    if (lines.length) lines.push("");
-    lines.push(`# ${section}`, "", ...items);
+    let at = limit;
+    while (at > 0 && !lines[at - 1].trim()) at--;
+    // Blank lines at the true end of the file are trailing noise; the same
+    // lines above an unterminated fence are the author's spacing, and stay.
+    const drop = limit === lines.length ? limit - at : 0;
+    const head = at > 0 ? ["", `# ${section}`, ""] : [`# ${section}`, ""];
+    lines.splice(at, drop, ...head, ...items);
     return;
   }
 
   let end = start + 1;
-  while (end < lines.length && !/^#{1,6}\s+\S/.test(lines[end])) end++;
+  while (end < limit && !/^#{1,6}\s+\S/.test(lines[end])) end++;
   const fenced = fencedLines(lines);
-  // A placeholder left by an earlier empty listing gives way to real entries.
+  // A placeholder left by a hand-written index, or by an earlier version of
+  // this plugin, gives way to real entries.
   for (let i = end - 1; i > start; i--) {
     if (!fenced[i] && PLACEHOLDER_RE.test(lines[i])) {
       lines.splice(i, 1);
@@ -1000,12 +1390,21 @@ function validateIndex(content: string, isRoot: boolean): OkfIssue[] {
 
   const body = hasFm ? split.body : content;
   const hasHeading = /^#{1,6}\s+\S/m.test(body);
-  const hasLinkBullet = /^\s*[*-]\s+\[[^\]]+\]\([^)]+\)/m.test(body);
+  // Entries are read with the same scanner `mergeIndex` uses, so one reader
+  // decides what an entry is. A pattern that stops at the first `]` can't see
+  // the line `renderEntry` writes for a title holding brackets (`Rev [2]`), and
+  // an index this plugin had just generated would be reported as listing
+  // nothing. A wikilink entry counts too: the merger treats it as a listing, so
+  // §8 shouldn't be raised against an index written entirely in that syntax.
+  const hasLinkBullet = body
+    .split(/\r?\n/)
+    .some((l) => parseBulletLink(l) !== null || BULLET_WIKILINK_RE.test(l));
   // An empty directory has nothing to enumerate, and §8 asks an index to
-  // enumerate what is there. A listing that holds only its headings and a
-  // `_No concepts yet._` placeholder is saying exactly that, so it isn't held
-  // to the guidance about listing contents — otherwise the index generated for
-  // a new folder would be reported the moment it was written.
+  // enumerate what is there. This plugin now leaves such an index empty, which
+  // the `body.trim()` guard below already passes; a listing holding only its
+  // headings and a `_No concepts yet._` placeholder is saying the same thing in
+  // words — written by hand, or by an earlier version of this plugin — and is
+  // let through on the same grounds.
   const saysEmpty = body
     .split(/\r?\n/)
     .every(

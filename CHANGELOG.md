@@ -4,27 +4,28 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4.0] - 2026-07-29
+## [0.4.0] - 2026-07-30
 
 Index generation follows [#8](https://github.com/MartinForReal/okf-enforcer/issues/8):
-listings describe what they link to, and generation no longer destroys what you
-wrote — it adds to an existing index rather than replacing it. §8 makes
-`index.md` optional and §11 forbids failing a bundle for a missing one, so a
-folder with something to list gets an index generated rather than flagged, and
-one that exists is validated against §8.
+listings describe what they link to, they say what a directory holds rather than
+only that it holds something, and generation no longer destroys what you wrote —
+it adds to an existing index rather than replacing it. §8 makes `index.md`
+optional and §11 forbids failing a bundle for a missing one, so every folder gets
+an index generated rather than flagged for lacking one, and one that already
+exists is validated against §8.
 
 ### Added
-- **Entry descriptions** — a concept's entry in a generated `index.md` now
-  carries its frontmatter `description`, which §8 recommends ("Entries SHOULD
-  include the description from the linked concept's frontmatter"). (#8)
+- **Entry descriptions** — a note's entry in a generated `index.md` now carries
+  its frontmatter `description`, which §8 recommends ("Entries SHOULD include the
+  description from the linked concept's frontmatter"). (#8)
 - **Additive index generation** — generating over an existing `index.md` now
   appends only the entries it doesn't already list, leaving prose, ordering,
   section structure, and hand-edited descriptions exactly as written. A folder is
   matched whether its entry was written as `sub/` or `sub/index.md`, so nothing
-  is listed twice, and a `_No concepts yet._` placeholder gives way to real
-  entries. The new **Rebuild existing index.md** setting (off by default)
-  restores rewrite-from-scratch, which also prunes entries for notes that are
-  gone. (#8)
+  is listed twice, and a `_No concepts yet._` placeholder left by a hand-written
+  index gives way to real entries. The new **Rebuild existing index.md** setting
+  (off by default) restores rewrite-from-scratch, which also prunes entries for
+  notes that are gone and re-groups them under their current `type`. (#8)
 - **Link repair** — an entry that points at the right thing by the wrong path
   has its destination corrected in place: `sub/`, `sub`, `<sub/>`, and a
   mis-cased or differently escaped path all become `sub/index.md`. Only the
@@ -33,31 +34,60 @@ one that exists is validated against §8.
   `a.md`). Bullets inside a fenced code block are sample text, so an index that
   documents the format is neither rewritten nor appended to inside the fence.
   (#8)
-- **Stale entries are dropped.** An entry naming a note the folder no longer
+- **Stale entries are dropped.** An entry naming a file the folder no longer
   holds is removed, and a section heading left empty by that goes with it —
   unless the author wrote prose under it. Only entries this plugin would list
-  are candidates (`a.md`, `sub/`, `sub/index.md`); a cross-link deeper into the
-  tree, a path out of the folder, an absolute bundle path, a URL, and a link to
-  something that still exists but isn't a concept (`log.md`, an image) are all
-  left as written, however broken §6.1 allows them to be. (#8)
+  are candidates (`a.md`, `pic.png`, `sub/`, `sub/index.md`); a cross-link deeper
+  into the tree, a path out of the folder, an absolute bundle path, a URL, and a
+  link to something that still exists but the plugin doesn't list (`log.md`) are
+  all left as written, however broken §6.1 allows them to be. (#8)
 - **Subdirectory descriptions** — new **Subdirectory description section**
   setting names a heading in a subfolder's `index.md` (e.g. `Purpose`) whose
   first paragraph becomes that folder's description in the parent listing. Blank
   by default. Non-root indexes carry no frontmatter (§8), so a body section is
   the only place a folder can describe itself. Additive generation never touches
   the section, and a rebuild carries it over, so it survives a refresh. (#8)
+- **Generate index.md on startup** — new setting, off by default, that brings
+  every folder's `index.md` up to date once when the plugin loads. The existing
+  create/rename/delete hooks only see what happens while the plugin is running,
+  so this is for what changed while it wasn't: a vault synced from another
+  machine, or edited outside Obsidian. It runs before the startup scan, so the
+  scan judges the listings as they now stand rather than the ones it is about to
+  replace, and it runs quietly — progress in the status bar, no notice at the
+  end. Off by default because it writes across the whole vault, which is not
+  something to do to someone's notes unasked. (#8)
 
 ### Changed
+- **Entries are grouped by their `type`.** A generated listing files each note
+  under a heading derived from its `type` — `# Concepts`, `# Metrics`,
+  `# Attested Computations` — instead of putting everything under `# Concepts`.
+  §8 asks entries to be grouped under section headings for progressive
+  disclosure, and the type is what a reader is disclosing. Only the last word is
+  pluralised, so a multi-word type reads naturally; a lower-case type is
+  capitalised for the heading (`wiki` → `Wikis`) while capitals the author chose
+  are left alone, so an acronym stays one (`API` → `APIs`). Sections are ordered
+  subdirectories first, then types alphabetically, so a folder renders the same
+  way every time. Types that differ only in case share one section. (#8)
+- **A note with no `type` is listed under `# Untyped`** rather than assumed to be
+  a concept. §11 already reports the missing `type` as an error; the listing just
+  stops papering over it. (#8)
+- **Attachments are listed under `# Files`.** A file that isn't a note is still
+  part of what the directory holds, and §8 asks the index to enumerate the
+  directory's contents. Without this, a folder holding nothing but images
+  rendered an index claiming the folder was empty. Reserved files (`index.md`,
+  `log.md`) are still not listed. (#8)
 - **Every folder gets an `index.md`, including an empty and a newly created
   one.** §8 leaves the file optional, but a folder without one is a dead end in
   its parent's listing, so the plugin writes one everywhere rather than only
-  where there is something to enumerate. An empty listing says so with a
-  `_No concepts yet._` placeholder that the first real entry replaces, and the
-  §8 check no longer reports a listing for saying a directory is empty — the
-  index generated for a new folder would otherwise be flagged the moment it was
-  written. Creating a folder in the file explorer generates its index straight
-  away; nothing else announces a folder that holds no notes yet. Obsidian's
-  config folder and anything under **Excluded folders** are left alone. (#8)
+  where there is something to enumerate. A folder with nothing to list gets an
+  **empty** index — §8 asks an index to enumerate what a directory holds, and
+  there is nothing to enumerate — so the file exists for the parent entry to
+  point at without claiming anything. Creating a folder in the file explorer
+  generates its index straight away; nothing else announces a folder that holds
+  no notes yet. Obsidian's config folder and anything under **Excluded folders**
+  are left alone. The §8 check accepts both an empty index and one that says a
+  directory is empty in words, so an index written by hand or by an earlier
+  version of this plugin isn't reported for it. (#8)
 - Subdirectory entries in a generated `index.md` now link to that folder's own
   `index.md` rather than a bare `folder/` path — clicking the bare path in
   Obsidian's default settings created a new, empty note, and an index that
@@ -73,6 +103,24 @@ one that exists is validated against §8.
   it visited.
 - The default `generated.by` actor is now `okf-enforcer/0.4`. Existing vaults keep
   the actor already saved in their settings.
+- **The settings tab reads shorter and groups by subject.** Every option's
+  description was rewritten to a sentence or two — the four that had grown into
+  paragraphs (**Auto-generate index.md**, **Generate index.md on startup**,
+  **Rebuild existing index.md**, **Enable Portent validation**) most of all — and
+  **Warn on missing tags**, which had no description at all, gained one. The
+  index options moved out of **Automation** into their own **index.md** group,
+  **Excluded folders** and **Batch size** into **Scope & performance**: neither
+  scoping nor throughput is automation, and **Excluded folders** governs index
+  generation as much as validation. No setting was renamed, removed, or given a
+  new default, so nothing needs migrating.
+- **Rebuild existing index.md now says what it costs.** Its description read as a
+  list of what a rebuild refreshes and never mentioned that a rebuild discards
+  the file's prose, keeping only the section named by **Subdirectory description
+  section**. Both descriptions now say so.
+- **Default type for auto-fix is trimmed**, like the actor field already was. A
+  value of only spaces used to reach the frontmatter as `type:` with nothing
+  after it, which the plugin then reported as an error against the note — it now
+  falls back to `Concept`.
 
 ### Removed
 - **Check reserved files** setting. `index.md` / `log.md` structure is now always
@@ -110,6 +158,82 @@ one that exists is validated against §8.
   were, so a folder holding only subfolders — or nothing at all — was invisible
   to it, while its parent listed it and linked at an index nothing would write.
   The command now walks the folder tree itself. (#8)
+- **Emptying a listing left a stray blank line.** Dropping the last entry from an
+  existing index produced a file holding a single newline rather than an empty
+  one, so a folder whose last note was deleted didn't match the empty index a
+  rebuild writes for the same folder. (#8)
+- **A `]` in a title grew the index on every pass.** An entry was recognised by a
+  pattern that stopped at the first `]`, so `* [Rev [2] notes](rev.md)` read as
+  naming something the folder didn't hold — the plugin couldn't find the entry it
+  had just written, and appended a fresh copy every time the folder was touched.
+  Titles and destinations are now read with their brackets and parentheses
+  balanced, so an entry the plugin writes is one it can find again. This happened
+  on default settings. (#8)
+- **Parentheses in a file name truncated the entry.** `report (1).pdf` was
+  written as `report%20(1).pdf` — `encodeURI` leaves parentheses alone — and read
+  back as a link to `report%20(1`, so the entry was rewritten with everything
+  after it, hand-written description included, thrown away. Destinations now
+  escape their parentheses, and reading one balances them. (#8)
+- **An entry linking at a heading was deleted.** `* [Simple Paxos](paxos.md#simple)`
+  names `paxos.md`, but the whole string was looked up as a file name, found
+  nothing, and the entry was dropped as stale — taking the author's description
+  with it. §6.1 permits broken links; only an entry naming a file the folder no
+  longer holds is a candidate. A `#fragment` or `?query` is now split off before
+  the lookup, and kept when a destination is corrected. (#8)
+- **An index written in `[[wikilinks]]` was listed twice.** Only `[Title](link)`
+  entries counted as already listed, so the first generation over an index
+  written in Obsidian's own link syntax appended a second copy of every entry.
+  Wikilink entries are now recognised — `[[note]]`, `[[note|Alias]]`,
+  `[[note#heading]]` — and left exactly as written: §8 asks for markdown links,
+  but rewriting the syntax an author chose is the same destructive move in
+  another coat. A wikilink names a file rather than spelling out a destination,
+  so none of a destination's punctuation applies inside it: `[[notes (draft)]]`
+  is that note, not `notes` with a title after it. (#8)
+- **A heading the plugin doesn't generate was removed with its entries.** Dropping
+  a stale entry took the heading above it whenever nothing was left underneath,
+  `# Reading list` and any other section an author added included. Only a heading
+  this plugin would itself write is removed now — and a type heading that has
+  emptied out (`# Concepts`) is left standing rather than deleted, since with no
+  notes left in the folder there is nothing to tell it apart from a heading
+  someone wrote. (#8)
+- **Pruning a root index glued its frontmatter to the listing.** A root
+  `index.md` whose first entry was dropped could come back as `---# Concepts`,
+  closing fence and heading on one line — a state no later pass repaired and the
+  §8 check didn't report. (#8)
+- **A title could take over the link it sat in.** A note titled
+  `See](elsewhere.md) this` rendered an entry pointing at `elsewhere.md`;
+  brackets in a title are now escaped. Titles are also collapsed to a single line
+  and clipped at 200 characters, which descriptions already were. (#8)
+- **`#` and `?` in a file name produced a link the plugin couldn't follow.**
+  `encodeURI` leaves the reserved delimiters alone, so `Meeting #3.md` was
+  written as `Meeting%20#3.md` — which Obsidian reads as a link to a note called
+  `Meeting ` at a heading. Both are now escaped, alongside the parentheses, and a
+  destination is compared with them folded back so the escaped form and one
+  typed by hand still count as the same entry — a name that literally holds the
+  characters `%23` included, which is a different file and stays one. A `#` in a
+  *folder* name no longer truncates a path either: an entry naming
+  `research#2024/papers/paxos.md` used to look like a note this folder had held
+  and lost, and a link reaching past the folder is now left alone rather than
+  read as a heading in a sibling. (#8)
+- **An entry written as a numbered list was listed a second time.** Only `*`,
+  `-` and `+` bullets were recognised, so an index written as `1. [Q](q.md)` had
+  every one of its entries appended again underneath. A numbered entry now counts
+  as a listing and, like a wikilink, is never rewritten or pruned — the shape is
+  the author's. A line that only looks like one doesn't count: CommonMark starts
+  an ordered list mid-paragraph only at `1`, so a `2.` written under prose is
+  read as the sentence it is. An embed (`![[banner.png]]`) no longer counts
+  either: it displays a file rather than linking to one, so the `# Files` entry
+  for it is still added. (#8)
+- **An unterminated ``` fence grew the index on every pass.** A fence that never
+  closes runs to the end of the file, so entries appended below it were read back
+  as sample text and appended again — a stray fence in prose was enough. New
+  entries are now placed above an unterminated fence, and only an unterminated
+  one: a file whose last line closes a block still takes new entries after it.
+  (#8)
+- **The §8 check couldn't read the entries this plugin writes.** An index whose
+  titles hold brackets, or that is written entirely in wikilinks, was reported as
+  not listing the directory's contents. The check and the merger now read an
+  entry the same way. (#8)
 - The community-store entry description said "OKF v0.1"; the plugin has targeted
   v0.2 since 0.3.0.
 

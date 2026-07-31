@@ -173,6 +173,7 @@ var DEFAULT_SETTINGS = {
   scanOnStartup: true,
   fixOnSave: true,
   autoGenerateIndex: true,
+  generateIndexOnStartup: false,
   overwriteExistingIndex: false,
   indexSubdirDescSection: "",
   autoMigrateOnFix: true,
@@ -249,12 +250,98 @@ function sectionBlock(content, section) {
   while (end < lines.length && !/^#{1,6}\s+\S/.test(lines[end])) end++;
   return lines.slice(start, end).join("\n").trim();
 }
+function escapeLinkText(text) {
+  return text.replace(/([\\[\]])/g, "\\$1");
+}
+function encodeLink(name) {
+  return encodeURI(name).replace(/\(/g, "%28").replace(/\)/g, "%29").replace(/#/g, "%23").replace(/\?/g, "%3F");
+}
 function renderEntry(e) {
-  return `* [${e.title}](${e.link})${e.desc ? ` - ${e.desc}` : ""}`;
+  return `* [${escapeLinkText(e.title)}](${e.link})${e.desc ? ` - ${e.desc}` : ""}`;
+}
+var INDEX_SECTIONS = {
+  subdirs: "Subdirectories",
+  untyped: "Untyped",
+  files: "Files"
+};
+var IRREGULAR_PLURALS = {
+  person: "people",
+  child: "children"
+};
+function pluralize(word) {
+  const lower = word.toLowerCase();
+  const irregular = IRREGULAR_PLURALS[lower];
+  if (irregular) {
+    return word[0] === lower[0] ? irregular : irregular[0].toUpperCase() + irregular.slice(1);
+  }
+  if (/[a-z]{2}is$/i.test(word)) return word.slice(0, -2) + "es";
+  if (/[^su]s$/i.test(word)) return word;
+  if (/[^aeiou]y$/i.test(word)) return word.slice(0, -1) + "ies";
+  if (/(s|x|z|ch|sh)$/i.test(word)) return word + "es";
+  return word + "s";
+}
+function headingCase(word) {
+  return word === word.toLowerCase() ? word.charAt(0).toUpperCase() + word.slice(1) : word;
+}
+function sectionForType(type) {
+  if (typeof type !== "string") return INDEX_SECTIONS.untyped;
+  const t = oneLine(type, 80).replace(/^#+\s*/, "").trim();
+  if (!t) return INDEX_SECTIONS.untyped;
+  const words = t.split(/\s+/).map(headingCase);
+  words[words.length - 1] = pluralize(words[words.length - 1]);
+  return words.join(" ");
 }
 var BULLET_RE = /^\s*[*\-+]\s+\S/;
-var BULLET_LINK_RE = /^(\s*[*\-+]\s+\[[^\]]*\]\()([^)]*)\)/;
+var BULLET_MARKER_RE = /^(\s*[*\-+]\s+)/;
+var LIST_MARKER_RE = /^(\s*(?:[*\-+]|\d{1,9}[.)])\s+)/;
+var ORDINAL_RE = /^\s*(\d{1,9})[.)]\s/;
 var PLACEHOLDER_RE = /^\s*_No .+ yet\._\s*$/;
+var BULLET_WIKILINK_RE = /^\s*(?:[*\-+]|\d{1,9}[.)])\s+\[\[([^\]|#^]*)/;
+function readDest(line, open) {
+  let j = open;
+  for (let depth = 1; j < line.length; j++) {
+    const c = line[j];
+    if (c === "\\") j++;
+    else if (c === "(") depth++;
+    else if (c === ")" && --depth === 0) break;
+  }
+  return line[j] === ")" ? { dest: line.slice(open, j), end: j } : null;
+}
+function parseBulletLink(line) {
+  var _a;
+  const marker = line.match(LIST_MARKER_RE);
+  if (!marker || line[marker[0].length] !== "[") return null;
+  const start = marker[0].length + 1;
+  let nested;
+  let i = start;
+  for (let depth = 1; i < line.length; i++) {
+    const c = line[i];
+    if (c === "\\") i++;
+    else if (c === "[") depth++;
+    else if (c === "]") {
+      if (depth > 1 && nested === void 0 && line[i + 1] === "(") {
+        nested = (_a = readDest(line, i + 2)) == null ? void 0 : _a.dest;
+      }
+      if (--depth === 0) break;
+    }
+  }
+  if (line[i] !== "]" || line[i + 1] !== "(") {
+    const first = line.indexOf("]", start);
+    if (first < 0 || line[first + 1] !== "(") return null;
+    i = first;
+    nested = void 0;
+  }
+  const open = i + 2;
+  const dest = readDest(line, open);
+  if (!dest) return null;
+  return {
+    prefix: line.slice(0, open),
+    dest: dest.dest,
+    suffix: line.slice(dest.end),
+    ordered: !BULLET_MARKER_RE.test(marker[0]),
+    nested
+  };
+}
 function splitDest(dest) {
   const rest = dest.replace(/^\s+/, "");
   const angled = rest.match(/^<([^>]*)>/);
@@ -266,28 +353,39 @@ function splitDest(dest) {
 }
 function decodePath(target) {
   const t = target.replace(/^\.\//, "");
+  const literal = (s) => s.replace(/%23/gi, "#").replace(/%3F/gi, "?");
   try {
-    return decodeURI(t);
+    return decodeURI(literal(t));
   } catch (e) {
-    return t;
+    return literal(t);
   }
 }
+function splitFragment(target) {
+  const at = target.slice(1).search(/[#?]/);
+  return at < 0 ? { path: target, fragment: "" } : { path: target.slice(0, at + 1), fragment: target.slice(at + 1) };
+}
 function sameTarget(a, b) {
-  return decodePath(a) === decodePath(b);
+  return decodePath(splitFragment(a).path) === decodePath(splitFragment(b).path);
+}
+function pathKey(path) {
+  return decodePath(path).replace(/\/index\.md$/i, "").replace(/\/+$/, "").toLowerCase();
 }
 function linkKey(dest) {
-  return decodePath(splitDest(dest).target).replace(/\/index\.md$/i, "").replace(/\/+$/, "").toLowerCase();
+  return pathKey(splitFragment(splitDest(dest).target).path);
+}
+function wikilinkKeys(target, canonical) {
+  const t = target.trim();
+  if (!t) return [];
+  if (/\.[a-z0-9]+$/i.test(t) || t.endsWith("/")) return [pathKey(t)];
+  const md = pathKey(`${t}.md`);
+  return canonical.has(md) ? [md] : [pathKey(t)];
 }
 function renderIndex(entries, keep = "") {
+  if (entries.length === 0) return keep ? `${keep}
+` : "";
   let out = keep ? `${keep}
 
 ` : "";
-  if (entries.length === 0) {
-    return `${out}# Concepts
-
-_No concepts yet._
-`;
-  }
   let section = "";
   for (const e of entries) {
     if (e.section !== section) {
@@ -302,11 +400,12 @@ _No concepts yet._
   }
   return out;
 }
+var FENCE_RE = /^\s{0,3}(`{3,}|~{3,})/;
 function fencedLines(lines) {
   const mask = [];
   let fence = "";
   for (const line of lines) {
-    const open = line.match(/^\s{0,3}(`{3,}|~{3,})/);
+    const open = line.match(FENCE_RE);
     if (open) {
       if (!fence) fence = open[1][0];
       else if (open[1][0] === fence) fence = "";
@@ -316,6 +415,15 @@ function fencedLines(lines) {
     mask.push(fence !== "");
   }
   return mask;
+}
+function ordinalOpensList(lines, i) {
+  const n = lines[i].match(ORDINAL_RE);
+  if (!n || n[1] === "1") return true;
+  for (let j = i - 1; j >= 0; j--) {
+    if (LIST_MARKER_RE.test(lines[j]) || /^\s{2,}\S/.test(lines[j])) return true;
+    if (!lines[j].trim() || /^#{1,6}\s/.test(lines[j])) return j === i - 1;
+  }
+  return i === 0;
 }
 function isOwnEntry(target) {
   if (!target || target.startsWith("/") || target.startsWith("#")) return false;
@@ -345,22 +453,48 @@ function mergeIndex(existing, entries, exists) {
       section = head[1].trim();
       continue;
     }
-    const m = lines[i].match(BULLET_LINK_RE);
-    if (!m) continue;
-    const key = linkKey(m[2]);
+    if (!ordinalOpensList(lines, i)) continue;
+    const link = parseBulletLink(lines[i]);
+    if (!link) {
+      const wiki = lines[i].match(BULLET_WIKILINK_RE);
+      if (wiki) for (const key2 of wikilinkKeys(wiki[1], canonical)) listed.add(key2);
+      continue;
+    }
+    const { target, trailer } = splitDest(link.dest);
+    const split = splitFragment(target);
+    const wholeKey = pathKey(target);
+    const splitKey = pathKey(split.path);
+    let names = false;
+    if (wholeKey !== splitKey) {
+      if (canonical.has(wholeKey) || !isOwnEntry(target)) {
+        names = true;
+      } else {
+        const alt = canonical.get(splitKey);
+        const risky = alt === void 0 ? !!exists && isOwnEntry(split.path) : !sameTarget(split.path, alt);
+        names = risky && !!exists && exists(decodePath(target).replace(/\/+$/, ""));
+      }
+    }
+    const targetPath = names ? target : split.path;
+    const fragment = names ? "" : split.fragment;
+    if (link.nested !== void 0) {
+      listed.add(linkKey(link.nested));
+      continue;
+    }
+    const key = pathKey(targetPath);
     listed.add(key);
+    if (link.ordered) continue;
     const want = canonical.get(key);
-    const { target, trailer } = splitDest(m[2]);
     if (want === void 0) {
-      const path = decodePath(target).replace(/\/+$/, "");
-      if (exists && isOwnEntry(target) && !exists(path)) {
+      const whole = decodePath(target).replace(/\/+$/, "");
+      const path = decodePath(targetPath).replace(/\/+$/, "");
+      if (exists && isOwnEntry(target) && !exists(whole) && (path === whole || !exists(path))) {
         stale.push(i);
         emptied.add(section);
       }
       continue;
     }
-    if (!sameTarget(target, want)) {
-      lines[i] = m[1] + want + trailer + lines[i].slice(m[1].length + m[2].length);
+    if (!sameTarget(targetPath, want)) {
+      lines[i] = link.prefix + want + fragment + trailer + link.suffix;
       changed = true;
     }
   }
@@ -372,8 +506,12 @@ function mergeIndex(existing, entries, exists) {
     }
     changed = true;
   }
+  const owned = new Set(
+    Object.values(INDEX_SECTIONS).map((s) => s.toLowerCase())
+  );
+  for (const e of entries) owned.add(e.section.trim().toLowerCase());
   for (const name of emptied) {
-    if (!name) continue;
+    if (!name || !owned.has(name.trim().toLowerCase())) continue;
     const at = headingIndex(lines, name);
     if (at < 0) continue;
     let end = at + 1;
@@ -397,18 +535,40 @@ function mergeIndex(existing, entries, exists) {
   }
   if (!changed) return existing;
   while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+  if (prefix && lines.length && lines[0].trim()) lines.unshift("", "");
+  if (lines.length === 0) return prefix ? prefix + eol : "";
   return prefix + lines.join(eol) + eol;
 }
+function fenceOpenAtEnd(lines) {
+  let fence = "";
+  for (const line of lines) {
+    const open = line.match(FENCE_RE);
+    if (!open) continue;
+    if (!fence) fence = open[1][0];
+    else if (open[1][0] === fence) fence = "";
+  }
+  return fence !== "";
+}
+function writableEnd(lines) {
+  if (!fenceOpenAtEnd(lines)) return lines.length;
+  const fenced = fencedLines(lines);
+  let end = lines.length;
+  while (end > 0 && fenced[end - 1]) end--;
+  return end;
+}
 function appendToSection(lines, section, items) {
-  const start = headingIndex(lines, section);
+  const limit = writableEnd(lines);
+  const start = headingIndex(lines.slice(0, limit), section);
   if (start < 0) {
-    while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
-    if (lines.length) lines.push("");
-    lines.push(`# ${section}`, "", ...items);
+    let at2 = limit;
+    while (at2 > 0 && !lines[at2 - 1].trim()) at2--;
+    const drop = limit === lines.length ? limit - at2 : 0;
+    const head = at2 > 0 ? ["", `# ${section}`, ""] : [`# ${section}`, ""];
+    lines.splice(at2, drop, ...head, ...items);
     return;
   }
   let end = start + 1;
-  while (end < lines.length && !/^#{1,6}\s+\S/.test(lines[end])) end++;
+  while (end < limit && !/^#{1,6}\s+\S/.test(lines[end])) end++;
   const fenced = fencedLines(lines);
   for (let i = end - 1; i > start; i--) {
     if (!fenced[i] && PLACEHOLDER_RE.test(lines[i])) {
@@ -792,7 +952,7 @@ function validateIndex(content, isRoot) {
   }
   const body = hasFm ? split.body : content;
   const hasHeading = /^#{1,6}\s+\S/m.test(body);
-  const hasLinkBullet = /^\s*[*-]\s+\[[^\]]+\]\([^)]+\)/m.test(body);
+  const hasLinkBullet = body.split(/\r?\n/).some((l) => parseBulletLink(l) !== null || BULLET_WIKILINK_RE.test(l));
   const saysEmpty = body.split(/\r?\n/).every(
     (l) => !l.trim() || /^#{1,6}\s+\S/.test(l) || PLACEHOLDER_RE.test(l)
   );
@@ -1283,12 +1443,26 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
     this.addSettingTab(new OkfSettingTab(this.app, this));
     this.app.workspace.onLayoutReady(() => {
       this.layoutReady = true;
-      if (this.settings.scanOnStartup) {
-        window.setTimeout(() => {
-          void this.scanVault(false, true);
-        }, 1500);
-      }
+      window.setTimeout(() => {
+        void this.startupPass();
+      }, 1500);
     });
+  }
+  /**
+   * The startup work, once the workspace has settled: bring the indexes up to
+   * date, then scan. Both are opt-out/opt-in toggles, and either may be off.
+   *
+   * Indexes go first because a scan validates `index.md` against §8, and a
+   * stale listing the pass is about to rewrite shouldn't be reported as a
+   * finding the user then has to look at. They run one after the other rather
+   * than together because each takes `this.busy` for the duration, so
+   * overlapping them would mean one silently doing nothing.
+   */
+  async startupPass() {
+    if (this.settings.autoGenerateIndex && this.settings.generateIndexOnStartup) {
+      await this.generateAllIndexes(true);
+    }
+    if (this.settings.scanOnStartup) await this.scanVault(false, true);
   }
   onunload() {
   }
@@ -1634,7 +1808,7 @@ Click to open the report`
   }
   /** Writes the folder's index.md; returns whether the file changed on disk. */
   async generateIndexForFolder(folder, notify = true) {
-    var _a, _b;
+    var _a, _b, _c;
     if (!folder) {
       if (notify) new import_obsidian3.Notice("OKF: no folder for the active note.");
       return false;
@@ -1644,23 +1818,37 @@ Click to open the report`
     const current = existing instanceof import_obsidian3.TFile ? await this.app.vault.read(existing) : null;
     const kept = current === null ? "" : sectionBlock(current, this.settings.indexSubdirDescSection);
     const children = folder.children;
-    const concepts = [];
+    const byType = /* @__PURE__ */ new Map();
     const subdirs = [];
+    const files = [];
     for (const child of children) {
       if (child instanceof import_obsidian3.TFile) {
-        if (child.extension !== "md") continue;
         if (isReserved(child.path)) continue;
+        if (child.extension !== "md") {
+          files.push({
+            section: INDEX_SECTIONS.files,
+            link: encodeLink(child.name),
+            title: child.name,
+            desc: ""
+          });
+          continue;
+        }
         const fm = (_b = (_a = this.app.metadataCache.getFileCache(child)) == null ? void 0 : _a.frontmatter) != null ? _b : {};
         const fmTitle = fm["title"];
         const fmDesc = fm["description"];
-        const title = typeof fmTitle === "string" && fmTitle.length > 0 ? fmTitle : basename(child.path);
+        const fmTitleText = typeof fmTitle === "string" ? oneLine(fmTitle) : "";
+        const title = fmTitleText || basename(child.path);
         const desc = typeof fmDesc === "string" ? oneLine(fmDesc) : "";
-        concepts.push({
-          section: "Concepts",
-          link: encodeURI(child.name),
+        const section = sectionForType(fm["type"]);
+        const bucket = byType.get(section);
+        const entry = {
+          section,
+          link: encodeLink(child.name),
           title,
           desc
-        });
+        };
+        if (bucket) bucket.push(entry);
+        else byType.set(section, [entry]);
       } else if (child instanceof import_obsidian3.TFolder) {
         if (!this.folderIsIndexable(child)) continue;
         let childIndex = this.app.vault.getAbstractFileByPath(
@@ -1673,14 +1861,27 @@ Click to open the report`
           );
         }
         subdirs.push({
-          section: "Subdirectories",
-          link: `${encodeURI(child.name)}/index.md`,
+          section: INDEX_SECTIONS.subdirs,
+          link: `${encodeLink(child.name)}/index.md`,
           title: child.name,
           desc: childIndex instanceof import_obsidian3.TFile ? await this.folderDescription(childIndex) : ""
         });
       }
     }
-    const entries = [...subdirs, ...concepts];
+    const groups = [
+      [INDEX_SECTIONS.subdirs, subdirs],
+      ...[...byType.entries()].filter(([section]) => section !== INDEX_SECTIONS.untyped).sort(([a], [b]) => a.localeCompare(b)),
+      [INDEX_SECTIONS.untyped, (_c = byType.get(INDEX_SECTIONS.untyped)) != null ? _c : []],
+      [INDEX_SECTIONS.files, files]
+    ];
+    const sections = /* @__PURE__ */ new Map();
+    for (const [section, group] of groups) {
+      if (group.length === 0) continue;
+      const at = sections.get(section.toLowerCase());
+      if (!at) sections.set(section.toLowerCase(), [...group]);
+      else for (const e of group) at.push({ ...e, section: at[0].section });
+    }
+    const entries = [...sections.values()].flat();
     const maintaining = current !== null && !this.settings.overwriteExistingIndex;
     let out;
     if (maintaining) {
@@ -1751,9 +1952,9 @@ ${out}`;
     }
     return false;
   }
-  async generateAllIndexes() {
+  async generateAllIndexes(silent = false) {
     if (this.busy) {
-      new import_obsidian3.Notice("OKF: a scan/fix is already running\u2026");
+      if (!silent) new import_obsidian3.Notice("OKF: a scan/fix is already running\u2026");
       return;
     }
     this.busy = true;
@@ -1776,9 +1977,11 @@ ${out}`;
         },
         "OKF: building indexes"
       );
-      new import_obsidian3.Notice(
-        `OKF: updated index.md in ${written} of ${list.length} folder(s).`
-      );
+      if (!silent) {
+        new import_obsidian3.Notice(
+          `OKF: updated index.md in ${written} of ${list.length} folder(s).`
+        );
+      }
     } finally {
       this.busy = false;
     }
@@ -1870,14 +2073,14 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
         desc: "Value inserted into `type` when fixing notes that lack it.",
         control: (row) => row.addText(
           (t) => t.setValue(s.defaultType).onChange((v) => {
-            s.defaultType = v || "Concept";
+            s.defaultType = v.trim() || "Concept";
             save();
           })
         )
       },
       {
         name: "Default actor for `generated.by`",
-        desc: "Actor written when auto-fix adds a `generated` block (\xA77). Use `<producer>/<version>` (e.g. `okf-enforcer/0.4`) or `human:<id>`.",
+        desc: "Actor written when auto-fix adds a `generated` block (\xA77). Use `<producer>/<version>` (e.g. `okf-enforcer/0.4`) or `human:<id>`. Avoid commas \u2014 the block is written as inline YAML.",
         control: (row) => row.addText(
           (t) => t.setValue(s.defaultActor).onChange((v) => {
             s.defaultActor = v.trim() || "okf-enforcer/0.4";
@@ -1898,7 +2101,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       { name: "Automation", heading: true },
       {
         name: "Scan vault on startup",
-        desc: "Run a full conformance scan automatically when the plugin loads (deferred until the workspace is ready).",
+        desc: "Scan the whole vault for conformance when the plugin loads, once the workspace is ready.",
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.scanOnStartup).onChange((v) => {
             s.scanOnStartup = v;
@@ -1908,7 +2111,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       },
       {
         name: "Fix format issues on save",
-        desc: "When you edit a note, auto-insert missing OKF frontmatter (type/title/generated). Non-destructive; never overwrites existing values.",
+        desc: "Insert missing OKF frontmatter (`type`, `title`, `generated`) when you edit a note. Never overwrites a value you've set.",
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.fixOnSave).onChange((v) => {
             s.fixOnSave = v;
@@ -1917,8 +2120,19 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
         )
       },
       {
+        name: "Auto-migrate to latest OKF on fix",
+        desc: 'Let auto-fix also upgrade notes to the latest OKF version \u2014 `timestamp` \u2192 `generated`, `# Citations` \u2192 `sources`. Off leaves this to the "Migrate note to latest OKF" command, since a migration rewrites what you wrote.',
+        control: (row) => row.addToggle(
+          (tg) => tg.setValue(s.autoMigrateOnFix).onChange((v) => {
+            s.autoMigrateOnFix = v;
+            save();
+          })
+        )
+      },
+      { name: "index.md", heading: true },
+      {
         name: "Auto-generate index.md",
-        desc: `Keep a folder's index.md (\xA78 listing) up to date as its notes are added, renamed, and deleted, along with every listing above it \u2014 a parent describes its subdirectories by what they hold. Every folder gets one, including an empty and a newly created folder, so no listing points at a file that isn't there; the config folder and anything under "Excluded folders" are left alone. An existing index has missing entries added, wrong links corrected, and entries for deleted notes removed, or is rebuilt if "Rebuild existing index.md" is on.`,
+        desc: `Keep every folder's index.md (its \xA78 listing) current as notes are added, renamed, and deleted \u2014 including the listings above it, since a parent describes its subfolders by what they hold. Every folder gets an index, an empty one included; the config folder and "Excluded folders" are left alone.`,
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.autoGenerateIndex).onChange((v) => {
             s.autoGenerateIndex = v;
@@ -1927,8 +2141,18 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
         )
       },
       {
+        name: "Generate index.md on startup",
+        desc: 'Bring every index up to date once when the plugin loads, for what changed while Obsidian was closed \u2014 a vault synced from another machine, or edited outside it. Runs quietly, before the startup scan. Off by default; needs "Auto-generate index.md" on.',
+        control: (row) => row.addToggle(
+          (tg) => tg.setValue(s.generateIndexOnStartup).onChange((v) => {
+            s.generateIndexOnStartup = v;
+            save();
+          })
+        )
+      },
+      {
         name: "Rebuild existing index.md",
-        desc: "Off (default): generating an index adds the entries it doesn't already list, corrects a link that points at the wrong path, and drops one whose note this folder no longer holds, leaving your prose, ordering, titles, and edited descriptions untouched. On: the listing is rewritten from the folder's contents, which also refreshes every description and re-sorts the entries.",
+        desc: "Off (default): generating an index adds what it doesn't already list, corrects a link pointing at the wrong path, and drops an entry whose note is gone, leaving your prose, ordering, titles, and descriptions alone. On: the listing is rewritten from the folder's contents, which refreshes every description and re-groups entries under their current `type` \u2014 but discards any prose you added, apart from the section named below.",
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.overwriteExistingIndex).onChange((v) => {
             s.overwriteExistingIndex = v;
@@ -1938,7 +2162,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       },
       {
         name: "Subdirectory description section",
-        desc: "Heading in a subfolder's index.md whose first paragraph becomes that folder's description in the parent listing (e.g. `Purpose`). The section is preserved when that index is regenerated, so what you write there survives a refresh. Leave blank for no subdirectory descriptions. Subdirectory entries always link at the folder's own index.md.",
+        desc: "Heading in a subfolder's index.md whose first paragraph becomes that folder's description in the parent listing (e.g. `Purpose`). This is the one section a rebuild carries over. Blank leaves subfolder entries undescribed.",
         control: (row) => row.addText(
           (t) => t.setPlaceholder("Purpose").setValue(s.indexSubdirDescSection).onChange((v) => {
             s.indexSubdirDescSection = v.trim();
@@ -1946,31 +2170,10 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
           })
         )
       },
-      {
-        name: "Auto-migrate to latest OKF on fix",
-        desc: 'Let auto-fix (and fix-on-save) also upgrade notes to the latest OKF version \u2014 e.g. rewrite legacy `timestamp` \u2192 `generated` and lift `# Citations` \u2192 `sources`. On by default. Turn off to keep migrations manual via the "Migrate note to latest OKF" command, since they rewrite existing content.',
-        control: (row) => row.addToggle(
-          (tg) => tg.setValue(s.autoMigrateOnFix).onChange((v) => {
-            s.autoMigrateOnFix = v;
-            save();
-          })
-        )
-      },
-      {
-        name: "Batch size",
-        desc: "Files processed per async chunk during scan/fix. Lower = smoother UI on large vaults; higher = faster.",
-        control: (row) => row.addText(
-          (t) => t.setValue(String(s.batchSize)).onChange((v) => {
-            const n = parseInt(v, 10);
-            s.batchSize = isNaN(n) || n < 1 ? 50 : Math.min(n, 1e3);
-            save();
-          })
-        )
-      },
       { name: "Rules", heading: true },
       {
         name: "Warn on missing recommended fields",
-        desc: "title, description, generated (\xA74.1, \xA75.2).",
+        desc: "Warn when `title`, `description`, or `generated` is missing (\xA74.1, \xA75.2).",
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.warnRecommendedFields).onChange((v) => {
             s.warnRecommendedFields = v;
@@ -1979,8 +2182,18 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
         )
       },
       {
+        name: "Warn on missing tags",
+        desc: "Warn when a note has no `tags`. Off by default \u2014 the spec doesn't ask for them.",
+        control: (row) => row.addToggle(
+          (tg) => tg.setValue(s.warnTagsField).onChange((v) => {
+            s.warnTagsField = v;
+            save();
+          })
+        )
+      },
+      {
         name: "Validate trust & lifecycle fields",
-        desc: "When present, check the v0.2 families: `verified` shape + actors, `status` vocabulary, `stale_after` date, and `sources` (\xA75). Advisory \u2014 off by default.",
+        desc: "Check the v0.2 trust fields on notes that carry them: `verified`, `status`, `stale_after`, `sources` (\xA75). Advisory; off by default.",
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.warnTrustFields).onChange((v) => {
             s.warnTrustFields = v;
@@ -1998,18 +2211,10 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
           })
         )
       },
-      {
-        name: "Warn on missing tags",
-        control: (row) => row.addToggle(
-          (tg) => tg.setValue(s.warnTagsField).onChange((v) => {
-            s.warnTagsField = v;
-            save();
-          })
-        )
-      },
+      { name: "Scope & performance", heading: true },
       {
         name: "Excluded folders",
-        desc: "Comma-separated paths skipped during validation and index generation. Use this for attachment folders you'd rather not have an index.md in.",
+        desc: "Comma-separated paths skipped by validation and index generation \u2014 use it for an attachments folder you'd rather not have an index.md in. The config folder is always skipped.",
         control: (row) => row.addText(
           (t) => t.setValue(s.excludeFolders.join(", ")).onChange((v) => {
             s.excludeFolders = list(v);
@@ -2017,10 +2222,21 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
           })
         )
       },
+      {
+        name: "Batch size",
+        desc: "Files processed per async chunk during scan/fix. Lower = smoother UI on large vaults; higher = faster.",
+        control: (row) => row.addText(
+          (t) => t.setValue(String(s.batchSize)).onChange((v) => {
+            const n = parseInt(v, 10);
+            s.batchSize = isNaN(n) || n < 1 ? 50 : Math.min(n, 1e3);
+            save();
+          })
+        )
+      },
       { name: "Portent", heading: true },
       {
         name: "Enable Portent validation",
-        desc: "Experimental (beta) \u2014 the Portent spec is pre-1.0 and may still change. Additionally validate notes against the Portent spec (portent.md): default type vocabulary (Project, Operation, Responsibility, Task, Event, Note, Topic, Person), lifecycle metadata (optional and format-free; status / organized / archived, or omitted when organized by default), and relationship shape (belongs_to, related_to as wikilinks). All Portent findings are warnings \u2014 they never block OKF conformance.",
+        desc: "Also check notes against the Portent spec (portent.md) \u2014 its type vocabulary, lifecycle, and `belongs_to`/`related_to` links. Findings are always warnings and never block OKF conformance. Experimental: Portent is pre-1.0 and may still change.",
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.enablePortent).onChange((v) => {
             s.enablePortent = v;
@@ -2031,7 +2247,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       },
       {
         name: "Validate type vocabulary",
-        desc: "Warn when `type` is not one of the configured Portent types. Turn off if you use your own type names.",
+        desc: "Warn when `type` isn't one of the accepted values set under Portent schema.",
         portentDependent: true,
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.portentCheckTypeVocab).onChange((v) => {
@@ -2042,7 +2258,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       },
       {
         name: "Validate lifecycle",
-        desc: "Check lifecycle values when present (status maps to the configured set; `organized`/`archived` are booleans). A missing lifecycle is never flagged.",
+        desc: "Check lifecycle values on notes that carry them. A note with no lifecycle is never flagged.",
         portentDependent: true,
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.portentCheckLifecycle).onChange((v) => {
@@ -2053,7 +2269,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       },
       {
         name: "Validate belongs_to",
-        desc: "Check `belongs_to` shape when present (a single wikilink to the primary parent).",
+        desc: "Check `belongs_to` when present \u2014 a single wikilink to the primary parent.",
         portentDependent: true,
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.portentCheckBelongsTo).onChange((v) => {
@@ -2064,7 +2280,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       },
       {
         name: "Validate related_to",
-        desc: "Check `related_to` shape when present (a list of wikilinks).",
+        desc: "Check `related_to` when present \u2014 a list of wikilinks.",
         portentDependent: true,
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.portentCheckRelatedTo).onChange((v) => {
@@ -2075,7 +2291,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       },
       {
         name: "Portent schema",
-        desc: "Customize the frontmatter keys and vocabularies Portent checks \u2014 track your own conventions or a future spec revision without a plugin update. Leave a field blank to restore its default.",
+        desc: "Rename the frontmatter keys and redefine the vocabularies Portent checks, to match your own conventions or a future spec revision. Leave a field blank to restore its default.",
         heading: true,
         portentDependent: true
       },
