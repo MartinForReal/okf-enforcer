@@ -163,7 +163,7 @@ var ACTOR_RE = /^(human:.+|process:.+|[^/\s]+\/[^/\s]+)$/;
 var ISO_DATETIME_RE = /^\d{4}-\d{2}-\d{2}T/;
 var DEFAULT_SETTINGS = {
   defaultType: "Concept",
-  defaultActor: "okf-enforcer/0.4",
+  defaultActor: "okf-enforcer/0.5",
   warnRecommendedFields: true,
   warnTrustFields: false,
   checkAttestedComputation: true,
@@ -1079,7 +1079,7 @@ function applyFixes(path, content, issues, settings, includeMigrations = false) 
   );
   if (fixes.size === 0) return { content, applied };
   const nowIso = (/* @__PURE__ */ new Date()).toISOString().replace(/\.\d{3}Z$/, "Z");
-  const actor = settings.defaultActor || "okf-enforcer/0.4";
+  const actor = settings.defaultActor || "okf-enforcer/0.5";
   const title = basename(path);
   const split = splitFrontmatter(content);
   if (!split.hasFm) {
@@ -2129,10 +2129,10 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       },
       {
         name: "Default actor for `generated.by`",
-        desc: "Actor written when auto-fix adds a `generated` block (\xA77). Use `<producer>/<version>` (e.g. `okf-enforcer/0.4`) or `human:<id>`. Avoid commas \u2014 the block is written as inline YAML.",
+        desc: "Actor written when auto-fix adds a `generated` block (\xA77). Use `<producer>/<version>` (e.g. `okf-enforcer/0.5`) or `human:<id>`. Avoid commas \u2014 the block is written as inline YAML.",
         control: (row) => row.addText(
           (t) => t.setValue(s.defaultActor).onChange((v) => {
-            s.defaultActor = v.trim() || "okf-enforcer/0.4";
+            s.defaultActor = v.trim() || "okf-enforcer/0.5";
             save();
           })
         )

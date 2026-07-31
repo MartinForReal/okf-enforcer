@@ -4,7 +4,7 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.0] - 2026-07-31
 
 Three §5 trust signals that didn't do what they promised. The derived trust tier
 and `sources[].author` were described as shipped in the 0.3.0 notes and the
@@ -27,6 +27,11 @@ form only, so a review deadline could pass unnoticed.
 
 All three sit behind **Validate trust & lifecycle fields**, off by default, so no
 vault starts reporting anything new unless it had already opted in.
+
+### Changed
+- The default **Actor for `generated.by`** is now `okf-enforcer/0.5`, tracking
+  the minor line as it did at 0.3.0 and 0.4.0. This is a default: if you have
+  ever saved settings, your existing actor is kept as written.
 
 ### Fixed
 - README and the 0.3.0 changelog entry claimed derived trust tiers and
@@ -289,7 +294,7 @@ the fallbacks below, so existing vaults keep validating.
   > **Correction.** This entry originally read "derives trust tiers (unverified /
   > machine-confirmed / human-reviewed)" and listed `author` among the validated
   > `sources` signals. Neither was true of 0.3.0: the tier was computed but never
-  > shown anywhere, and `author` was not checked. Both are fixed in Unreleased
+  > shown anywhere, and `author` was not checked. Both are fixed in 0.5.0
   > ([#11](https://github.com/MartinForReal/okf-enforcer/issues/11),
   > [#12](https://github.com/MartinForReal/okf-enforcer/issues/12)).
 - **Attested Computation concepts** (§10). A `type: Attested Computation` note is
@@ -442,7 +447,7 @@ Initial release.
 - Batched, non-blocking scan/fix queue with an inline progress bar for large vaults.
 - Settings for automation toggles, batch size, warning rules, and excluded folders.
 
-[Unreleased]: https://github.com/MartinForReal/okf-enforcer/compare/0.4.1...HEAD
+[0.5.0]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.5.0
 [0.4.1]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.4.1
 [0.4.0]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.4.0
 [0.3.0]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.3.0

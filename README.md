@@ -46,7 +46,7 @@ Clicking the status-bar item auto-fixes the active note and, if a required field
 Configure under **Settings → OKF Enforcer**:
 
 - **Default type for auto-fix** — value inserted into `type` when fixing notes that lack it.
-- **Default actor for `generated.by`** — the actor recorded when auto-fix adds a `generated` block (e.g. `okf-enforcer/0.4` or `human:<id>`). It goes into an inline YAML mapping, so it cannot contain a comma.
+- **Default actor for `generated.by`** — the actor recorded when auto-fix adds a `generated` block (e.g. `okf-enforcer/0.5` or `human:<id>`). It goes into an inline YAML mapping, so it cannot contain a comma.
 - **Live check on save / open** — validate the active note as you edit and when you open it.
 - **Automation** — **Scan vault on startup**, **Fix format issues on save**, and **Auto-migrate to latest OKF on fix**. The last is on by default and lets ordinary auto-fix apply the v0.1 → v0.2 migrations; turn it off to keep them behind the explicit command, since a migration rewrites what you wrote.
 - **Auto-generate index.md** — keep every folder's `index.md` current as notes are added, renamed, and deleted, along with every listing above it, since a parent describes its subdirectories by what they hold. Every folder gets one — a new or empty folder included, generated as soon as the folder appears and left empty while there is nothing to list.
