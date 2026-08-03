@@ -6,10 +6,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **The settings tab asks 18 questions instead of 29**
+  ([#17](https://github.com/MartinForReal/okf-enforcer/issues/17)). Several
+  options turned out to be one question split across several controls, and one
+  pair the code could not even tell apart:
+
+  - **On save** replaces *Live check on save / open* and *Fix format issues on
+    save* — Do nothing / Check the note / Check and fix. Both booleans gated the
+    same handler, so this was always a ladder rather than two independent axes.
+  - **Incomplete index.md** replaces *Auto-generate index.md*, *Generate
+    index.md on startup*, and *Report index gaps* (the last unreleased, so it
+    never reached a vault under that name) — Ignore / Report in the vault
+    scan / Write it as notes change / Write it as notes change, and at startup.
+    Writing and reporting are answers to one question, which the old layout left
+    the reader to work out. *Generate index.md on startup* also did nothing
+    whatsoever with auto-generation off: it was only ever read as
+    `autoGenerateIndex && generateIndexOnStartup`.
+  - **Warn about missing fields** replaces *Warn on missing recommended fields*
+    and *Warn on missing tags*, and is now per field: name any of `title`,
+    `description`, `generated`, `tags`.
+  - Portent's four *Validate …* toggles become one **Checks** row, and its five
+    field-name boxes become one **Field name overrides** row taking
+    `status=state, belongs_to=parent`.
+
+  **Rebuild existing index.md** and **Subdirectory description section** stay
+  independent rows and stay live in every index mode, because both
+  *Generate/refresh index.md* commands write regardless of the mode — greying
+  them out would hide two live controls, one of them destructive.
+
+  Existing settings carry over. The one combination no longer expressible is
+  generating indexes *and* reporting gaps, which reads as generating; with
+  generation on there was rarely a gap left to find.
+
+- **"Live check on save / open" never gated "open".** Opening a note was always
+  validated unconditionally — only the save path was ever gated — so the name,
+  the setting's own description, and the README all claimed a control the code
+  didn't have. The replacement is named **On save**, and the always-on
+  open-time check is now stated rather than implied. It is what the report
+  pane's active-note section reads, so gating it would only make that section
+  go stale behind the tab.
+
+### Removed
+- **Three settings that did nothing.** `warnBrokenLinks` had no read sites at
+  all — it was in the settings type and the defaults, and nowhere else.
+  `checkReservedFiles` and `promptVersionBumpOnMigrate` had been gone from the
+  source for some time but lived on in every vault's `data.json`, because
+  loading merged saved data over the defaults wholesale and wrote unknown keys
+  straight back out. Loading now keeps only fields that still exist, so a
+  dropped setting ages out of the vault instead of persisting forever.
+
 ### Added
 - **Index gaps can be reported instead of written** ([#15](https://github.com/MartinForReal/okf-enforcer/issues/15)).
-  A new **Report index gaps** setting, off by default, makes a vault scan warn
-  where a folder has no `index.md` and where an existing one doesn't list a note
+  Setting **Incomplete index.md** to *Report in the vault scan* makes a vault
+  scan warn where a folder has no `index.md` and where an existing one doesn't
+  list a note
   anywhere in the file — and write nothing. A note counts as listed under
   whatever heading, in whatever order, and in whatever grouping its author
   chose, so a listing kept by hand doesn't read as incomplete merely for not
