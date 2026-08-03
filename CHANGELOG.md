@@ -32,10 +32,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whether or not a scan has ever run. A note with nothing wrong says so rather
   than leaving the section blank, and a rescan or a **Fix all** re-reads the
   section from the same pass, so it can't sit there contradicting the list
-  below it. The active note is deliberately kept apart from the scan results
-  rather than merged into them: those count the vault, and one note's verdict
-  arriving between scans would leave the summary chips describing a vault
-  nobody scanned.
+  below it. An `index.md` carries its folder's §8 gap findings there too: a
+  scan files those against the index's path, but only reaches them by walking
+  the folder tree, so opening one would otherwise make it the single file the
+  plugin under-reports — clean in the editor, flagged in the list below. The
+  status bar counts them for the same reason. The active note is deliberately
+  kept apart from the scan results rather than merged into them: those count
+  the vault, and one note's verdict arriving between scans would leave the
+  summary chips describing a vault nobody scanned.
 
 ### Changed
 - The report pane groups findings by the folder they sit in. A row used to be a

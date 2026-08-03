@@ -446,6 +446,11 @@ export default class OkfPlugin extends Plugin {
       this.isRoot(file),
       this.settings
     );
+    // A gap belongs to the folder rather than to the index describing it, so a
+    // scan finds it in a pass of its own. Repeated here, or the note you have
+    // open is the one file the plugin under-reports: the same `index.md` would
+    // carry gaps in the list below that its own verdict had dropped.
+    issues.push(...(await this.indexGapsForActive(file)));
     this.updateStatus(issues, content);
     this.setActiveResult({ path: file.path, issues });
     if (openReport) {
@@ -973,6 +978,26 @@ export default class OkfPlugin extends Plugin {
         message: `\`index.md\` doesn't list \`${decodePath(e.link)}\`.`,
       })),
     };
+  }
+
+  /**
+   * The §8 gap findings for the folder an `index.md` describes, and nothing for
+   * any other note. A scan reaches these by walking the folder tree, which is a
+   * route a single open file hasn't got; without them the verdict on the note
+   * in the editor is a strict subset of the row the scan gives that same path,
+   * and the pane contradicts itself about one file.
+   *
+   * Guarded on the predicate the scan's own walk prunes by, so a folder the
+   * scan would never reach — excluded, or under Obsidian's config dir — doesn't
+   * acquire findings merely by being open.
+   */
+  private async indexGapsForActive(file: TFile): Promise<OkfIssue[]> {
+    if (!this.settings.reportIndexGaps) return [];
+    if (isReserved(file.path) !== "index") return [];
+    const folder = file.parent;
+    if (!folder || !this.folderIsIndexable(folder)) return [];
+    const gaps = await this.indexGapsForFolder(folder);
+    return gaps ? gaps.issues : [];
   }
 
   /**
