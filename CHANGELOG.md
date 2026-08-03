@@ -4,6 +4,35 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Index gaps can be reported instead of written** ([#15](https://github.com/MartinForReal/okf-enforcer/issues/15)).
+  A new **Report index gaps** setting, off by default, makes a vault scan warn
+  where a folder has no `index.md` and where an existing one doesn't list a note
+  anywhere in the file — and write nothing. A note counts as listed under
+  whatever heading, in whatever order, and in whatever grouping its author
+  chose, so a listing kept by hand doesn't read as incomplete merely for not
+  looking generated. Both findings are warnings: §8 makes an index optional and
+  §11 forbids failing a bundle for a missing one.
+
+  This comes from the closing comment on
+  [#8](https://github.com/MartinForReal/okf-enforcer/issues/8) — a vault that
+  writes its own indexes for readability can't use generation, because
+  generation writes a shape the vault didn't choose, but still wants to be told
+  when a listing has fallen behind.
+
+### Changed
+- The report pane offers **Open note →** only when the path resolves to a file.
+  It was always shown and silently did nothing otherwise, which a gap report —
+  which names the `index.md` a folder hasn't got — would hit every time.
+
+### Internal
+- The listing a folder's contents call for, and the write of that listing, are
+  now separate steps, so the gap report and the generator read a folder the same
+  way. "Is this note already listed?" likewise has one implementation shared
+  between reporting a gap and closing it.
+
 ## [0.5.0] - 2026-07-31
 
 Three §5 trust signals that didn't do what they promised. The derived trust tier

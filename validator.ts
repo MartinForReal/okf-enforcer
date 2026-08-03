@@ -102,6 +102,17 @@ export interface OkfSettings extends PortentSettings {
    */
   indexSubdirDescSection: string;
   /**
+   * Report what a folder's listing is missing instead of writing it (§8): a
+   * folder with no `index.md` at all, and the notes an existing one doesn't
+   * name anywhere in the file. Off by default. This is for a vault that keeps
+   * its listings by hand — its own headings, its own order, its own groupings —
+   * where generating over them writes a shape the vault didn't choose. Findings
+   * are warnings in the vault report and nothing else: §8 makes an index
+   * optional and §11 forbids failing a bundle for a missing one, and nothing
+   * here is written.
+   */
+  reportIndexGaps: boolean;
+  /**
    * Let ordinary auto-fix (including fix-on-save) also apply the v0.1→v0.2
    * migrations — rename `timestamp`→`generated`, lift `# Citations`→`sources`.
    * On by default. Turn off to keep migrations manual (only via the explicit
@@ -127,6 +138,7 @@ export const DEFAULT_SETTINGS: OkfSettings = {
   generateIndexOnStartup: false,
   overwriteExistingIndex: false,
   indexSubdirDescSection: "",
+  reportIndexGaps: false,
   autoMigrateOnFix: true,
   batchSize: 50,
   excludeFolders: ["Templates"],
@@ -533,7 +545,7 @@ function splitDest(dest: string): { target: string; trailer: string } {
  * link `encodeLink` writes for `Meeting #3.md` never compares equal to the one
  * an author typed, and the note is listed twice.
  */
-function decodePath(target: string): string {
+export function decodePath(target: string): string {
   const t = target.replace(/^\.\//, "");
   // Folded before `decodeURI`, not after: decoding turns `%25` into a literal
   // `%`, so folding afterwards would read the `%23` that surfaces in
@@ -707,12 +719,16 @@ function isOwnEntry(target: string): boolean {
  * `exists` reports whether a path relative to this folder still resolves in the
  * vault. Without it nothing is dropped, since a link that can't be checked
  * can't be known to be stale.
+ *
+ * Returns the merged text alongside the entries the file didn't already list,
+ * so that reporting a listing's gaps and closing them are one reading of the
+ * index rather than two that can come to disagree about it.
  */
-export function mergeIndex(
+function mergeIndexParts(
   existing: string,
   entries: IndexEntry[],
   exists?: (target: string) => boolean
-): string {
+): { text: string; unlisted: IndexEntry[] } {
   const { body } = splitFrontmatter(existing);
   const prefix = existing.slice(0, existing.length - body.length);
   const eol = existing.includes("\r\n") ? "\r\n" : "\n";
@@ -861,7 +877,7 @@ export function mergeIndex(
     }
     changed = true;
   }
-  if (!changed) return existing;
+  if (!changed) return { text: existing, unlisted: missing };
 
   while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
   // A frontmatter block ends at its closing `---` with no newline of its own,
@@ -871,8 +887,34 @@ export function mergeIndex(
   // Pruning can empty a listing outright, which is what a folder whose last
   // note was deleted should end up with — the same empty index a rebuild would
   // write, not a lone newline.
-  if (lines.length === 0) return prefix ? prefix + eol : "";
-  return prefix + lines.join(eol) + eol;
+  if (lines.length === 0) {
+    return { text: prefix ? prefix + eol : "", unlisted: missing };
+  }
+  return { text: prefix + lines.join(eol) + eol, unlisted: missing };
+}
+
+/** The merge itself — see `mergeIndexParts` for what it does and doesn't touch. */
+export function mergeIndex(
+  existing: string,
+  entries: IndexEntry[],
+  exists?: (target: string) => boolean
+): string {
+  return mergeIndexParts(existing, entries, exists).text;
+}
+
+/**
+ * The entries an existing `index.md` names nowhere in the file — under any
+ * heading, in any order, in whatever grouping its author invented. A vault that
+ * keeps its listings by hand wants to be told what slipped rather than have it
+ * inserted, so this is the reading `mergeIndex` appends from, stopped one step
+ * short of the append.
+ */
+export function unlistedEntries(
+  existing: string,
+  entries: IndexEntry[],
+  exists?: (target: string) => boolean
+): IndexEntry[] {
+  return mergeIndexParts(existing, entries, exists).unlisted;
 }
 
 /** Whether a fence is still open when the document runs out of lines. */

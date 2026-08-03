@@ -163,15 +163,20 @@ export class OkfReportView extends ItemView {
           txt.createSpan({ cls: "okf-rule", text: issue.rule });
           if (issue.fix) txt.createSpan({ cls: "okf-fixable", text: " · fixable" });
         }
-        const open = block.createEl("a", {
-          cls: "okf-open-link",
-          text: "Open note →",
-        });
-        open.onclick = (e) => {
-          e.preventDefault();
-          const f = this.app.vault.getAbstractFileByPath(r.path);
-          if (f instanceof TFile) void this.app.workspace.getLeaf(false).openFile(f);
-        };
+        // Offered only when there is something to open. A gap report names the
+        // index.md a folder hasn't got, and a button that silently does nothing
+        // reads as a broken pane rather than as a file that isn't there.
+        const target = this.app.vault.getAbstractFileByPath(r.path);
+        if (target instanceof TFile) {
+          const open = block.createEl("a", {
+            cls: "okf-open-link",
+            text: "Open note →",
+          });
+          open.onclick = (e) => {
+            e.preventDefault();
+            void this.app.workspace.getLeaf(false).openFile(target);
+          };
+        }
       }
     }
   }

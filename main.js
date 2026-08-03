@@ -176,6 +176,7 @@ var DEFAULT_SETTINGS = {
   generateIndexOnStartup: false,
   overwriteExistingIndex: false,
   indexSubdirDescSection: "",
+  reportIndexGaps: false,
   autoMigrateOnFix: true,
   batchSize: 50,
   excludeFolders: ["Templates"],
@@ -463,7 +464,7 @@ function isOwnEntry(target) {
   if (parts.length === 1) return true;
   return parts.length === 2 && parts[1].toLowerCase() === "index.md";
 }
-function mergeIndex(existing, entries, exists) {
+function mergeIndexParts(existing, entries, exists) {
   const { body } = splitFrontmatter(existing);
   const prefix = existing.slice(0, existing.length - body.length);
   const eol = existing.includes("\r\n") ? "\r\n" : "\n";
@@ -563,11 +564,19 @@ function mergeIndex(existing, entries, exists) {
     }
     changed = true;
   }
-  if (!changed) return existing;
+  if (!changed) return { text: existing, unlisted: missing };
   while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
   if (prefix && lines.length && lines[0].trim()) lines.unshift("", "");
-  if (lines.length === 0) return prefix ? prefix + eol : "";
-  return prefix + lines.join(eol) + eol;
+  if (lines.length === 0) {
+    return { text: prefix ? prefix + eol : "", unlisted: missing };
+  }
+  return { text: prefix + lines.join(eol) + eol, unlisted: missing };
+}
+function mergeIndex(existing, entries, exists) {
+  return mergeIndexParts(existing, entries, exists).text;
+}
+function unlistedEntries(existing, entries, exists) {
+  return mergeIndexParts(existing, entries, exists).unlisted;
 }
 function fenceOpenAtEnd(lines) {
   let fence = "";
@@ -1297,15 +1306,17 @@ var OkfReportView = class extends import_obsidian2.ItemView {
           txt.createSpan({ cls: "okf-rule", text: issue.rule });
           if (issue.fix) txt.createSpan({ cls: "okf-fixable", text: " \xB7 fixable" });
         }
-        const open = block.createEl("a", {
-          cls: "okf-open-link",
-          text: "Open note \u2192"
-        });
-        open.onclick = (e) => {
-          e.preventDefault();
-          const f = this.app.vault.getAbstractFileByPath(r.path);
-          if (f instanceof import_obsidian2.TFile) void this.app.workspace.getLeaf(false).openFile(f);
-        };
+        const target = this.app.vault.getAbstractFileByPath(r.path);
+        if (target instanceof import_obsidian2.TFile) {
+          const open = block.createEl("a", {
+            cls: "okf-open-link",
+            text: "Open note \u2192"
+          });
+          open.onclick = (e) => {
+            e.preventDefault();
+            void this.app.workspace.getLeaf(false).openFile(target);
+          };
+        }
       }
     }
   }
@@ -1724,6 +1735,23 @@ Click to open the report`
         },
         silent ? void 0 : "OKF: scanning"
       );
+      if (this.settings.reportIndexGaps) {
+        const byPath = new Map(results.map((r) => [r.path, r]));
+        await this.processQueue(
+          this.indexableFolders(),
+          async (folder) => {
+            const gaps = await this.indexGapsForFolder(folder);
+            if (!gaps) return;
+            const at = byPath.get(gaps.path);
+            if (at) at.issues.push(...gaps.issues);
+            else {
+              byPath.set(gaps.path, gaps);
+              results.push(gaps);
+            }
+          },
+          silent ? void 0 : "OKF: checking indexes"
+        );
+      }
       results.sort((a, b) => a.path.localeCompare(b.path));
       this.renderResults(results, files.length);
       const errFiles = results.filter(
@@ -1857,7 +1885,6 @@ Click to open the report`
   }
   /** Writes the folder's index.md; returns whether the file changed on disk. */
   async generateIndexForFolder(folder, notify = true) {
-    var _a, _b, _c;
     if (!folder) {
       if (notify) new import_obsidian3.Notice("OKF: no folder for the active note.");
       return false;
@@ -1866,6 +1893,25 @@ Click to open the report`
     const existing = this.app.vault.getAbstractFileByPath(indexPath);
     const current = existing instanceof import_obsidian3.TFile ? await this.app.vault.read(existing) : null;
     const kept = current === null ? "" : sectionBlock(current, this.settings.indexSubdirDescSection);
+    const entries = await this.indexEntriesFor(folder, true);
+    return await this.writeIndex(
+      folder,
+      indexPath,
+      current,
+      kept,
+      entries,
+      notify
+    );
+  }
+  /**
+   * The §8 listing a folder's contents call for, in the order they would be
+   * written. `fillMissingChildren` writes a subfolder's own `index.md` when it
+   * hasn't got one, so the entry linking at it points at a file that is there;
+   * a caller that only means to look — the gap report — passes false and leaves
+   * the vault untouched.
+   */
+  async indexEntriesFor(folder, fillMissingChildren) {
+    var _a, _b, _c;
     const children = folder.children;
     const byType = /* @__PURE__ */ new Map();
     const subdirs = [];
@@ -1903,7 +1949,7 @@ Click to open the report`
         let childIndex = this.app.vault.getAbstractFileByPath(
           `${child.path}/index.md`
         );
-        if (!(childIndex instanceof import_obsidian3.TFile) || this.indexesMissingBelow(child)) {
+        if (fillMissingChildren && (!(childIndex instanceof import_obsidian3.TFile) || this.indexesMissingBelow(child))) {
           await this.generateIndexForFolder(child, false);
           childIndex = this.app.vault.getAbstractFileByPath(
             `${child.path}/index.md`
@@ -1930,7 +1976,13 @@ Click to open the report`
       if (!at) sections.set(section.toLowerCase(), [...group]);
       else for (const e of group) at.push({ ...e, section: at[0].section });
     }
-    const entries = [...sections.values()].flat();
+    return [...sections.values()].flat();
+  }
+  /**
+   * Writes a folder's `index.md` from the listing its contents call for, and
+   * reports whether the file changed on disk.
+   */
+  async writeIndex(folder, indexPath, current, kept, entries, notify) {
     const maintaining = current !== null && !this.settings.overwriteExistingIndex;
     let out;
     if (maintaining) {
@@ -1950,6 +2002,7 @@ okf_version: "${OKF_VERSION}"
 ${out}`;
       }
     }
+    const existing = this.app.vault.getAbstractFileByPath(indexPath);
     if (existing instanceof import_obsidian3.TFile) {
       if (current === out) return false;
       this.selfWrites.add(indexPath);
@@ -1960,6 +2013,54 @@ ${out}`;
     }
     if (notify) new import_obsidian3.Notice(`OKF: wrote ${indexPath}`);
     return true;
+  }
+  /**
+   * What a folder's listing is missing, reported rather than written: no
+   * `index.md` at all, or notes the one there names nowhere in the file. For a
+   * vault that keeps its listings by hand — its own headings, its own order,
+   * its own groupings — where generating over them writes a shape the vault
+   * didn't choose.
+   *
+   * Both are warnings. §8 makes an index optional and §11 forbids failing a
+   * bundle for a missing one, so this says a vault's own convention has slipped,
+   * not that the bundle is non-conformant.
+   *
+   * Findings are filed against the index's path, which is the file to edit, and
+   * reads as "this should be here" in the case where it isn't.
+   */
+  async indexGapsForFolder(folder) {
+    const root = folder.path === "/" || folder.path === "";
+    const indexPath = root ? "index.md" : `${folder.path}/index.md`;
+    const index = this.app.vault.getAbstractFileByPath(indexPath);
+    if (!(index instanceof import_obsidian3.TFile)) {
+      return {
+        path: indexPath,
+        issues: [
+          {
+            severity: "warning",
+            rule: "\xA78",
+            message: `Folder \`${root ? "/" : folder.path}\` has no \`index.md\`, so nothing says what it holds.`
+          }
+        ]
+      };
+    }
+    const entries = await this.indexEntriesFor(folder, false);
+    if (entries.length === 0) return null;
+    const base = root ? "" : `${folder.path}/`;
+    const unlisted = unlistedEntries(
+      await this.app.vault.cachedRead(index),
+      entries,
+      (target) => this.app.vault.getAbstractFileByPath(base + target) !== null
+    );
+    if (unlisted.length === 0) return null;
+    return {
+      path: indexPath,
+      issues: unlisted.map((e) => ({
+        severity: "warning",
+        rule: "\xA78",
+        message: `\`index.md\` doesn't list \`${decodePath(e.link)}\`.`
+      }))
+    };
   }
   /**
    * Description for a subdirectory entry, read from the configured section of
@@ -2001,6 +2102,24 @@ ${out}`;
     }
     return false;
   }
+  /**
+   * Every folder this plugin treats as part of the bundle, the root included.
+   * The folder tree is walked rather than the notes in it: a folder that holds
+   * no notes — empty, or nothing but subfolders — still gets an index, so there
+   * is nothing to find it by except the tree itself.
+   */
+  indexableFolders() {
+    const list = [];
+    const walk = (folder) => {
+      if (!this.folderIsIndexable(folder)) return;
+      list.push(folder);
+      for (const child of folder.children) {
+        if (child instanceof import_obsidian3.TFolder) walk(child);
+      }
+    };
+    walk(this.app.vault.getRoot());
+    return list;
+  }
   async generateAllIndexes(silent = false) {
     if (this.busy) {
       if (!silent) new import_obsidian3.Notice("OKF: a scan/fix is already running\u2026");
@@ -2008,15 +2127,7 @@ ${out}`;
     }
     this.busy = true;
     try {
-      const list = [];
-      const walk = (folder) => {
-        if (!this.folderIsIndexable(folder)) return;
-        list.push(folder);
-        for (const child of folder.children) {
-          if (child instanceof import_obsidian3.TFolder) walk(child);
-        }
-      };
-      walk(this.app.vault.getRoot());
+      const list = this.indexableFolders();
       list.sort((a, b) => folderDepth(b.path) - folderDepth(a.path));
       let written = 0;
       await this.processQueue(
@@ -2215,6 +2326,16 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
         control: (row) => row.addText(
           (t) => t.setPlaceholder("Purpose").setValue(s.indexSubdirDescSection).onChange((v) => {
             s.indexSubdirDescSection = v.trim();
+            save();
+          })
+        )
+      },
+      {
+        name: "Report index gaps",
+        desc: `Off (default). On: a vault scan warns where a folder has no index.md, and where one it has doesn't list a note anywhere in the file \u2014 under any heading, in any order. It only reports; nothing is written. For a vault whose listings are kept by hand, where generating over them writes a shape you didn't choose. With "Auto-generate index.md" on there will rarely be a gap left to find.`,
+        control: (row) => row.addToggle(
+          (tg) => tg.setValue(s.reportIndexGaps).onChange((v) => {
+            s.reportIndexGaps = v;
             save();
           })
         )
