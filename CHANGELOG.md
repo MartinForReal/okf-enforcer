@@ -4,6 +4,66 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Index gaps can be reported instead of written** ([#15](https://github.com/MartinForReal/okf-enforcer/issues/15)).
+  A new **Report index gaps** setting, off by default, makes a vault scan warn
+  where a folder has no `index.md` and where an existing one doesn't list a note
+  anywhere in the file — and write nothing. A note counts as listed under
+  whatever heading, in whatever order, and in whatever grouping its author
+  chose, so a listing kept by hand doesn't read as incomplete merely for not
+  looking generated. Both findings are warnings: §8 makes an index optional and
+  §11 forbids failing a bundle for a missing one.
+
+  This comes from the closing comment on
+  [#8](https://github.com/MartinForReal/okf-enforcer/issues/8) — a vault that
+  writes its own indexes for readability can't use generation, because
+  generation writes a shape the vault didn't choose, but still wants to be told
+  when a listing has fallen behind.
+
+- **The note you have open is listed in the report pane.** Opening a note now
+  puts its warnings and errors in a section of their own at the top of the
+  pane, listed open rather than behind a click. Opening a note has always
+  re-validated it, but the verdict went to the status bar alone — a count, with
+  the detail in a tooltip — while the pane went on showing whatever the last
+  vault scan had found, every row collapsed. Now the note in the editor is in
+  front of you whether or not it happened to be failing when that scan ran, and
+  whether or not a scan has ever run. A note with nothing wrong says so rather
+  than leaving the section blank, and a rescan or a **Fix all** re-reads the
+  section from the same pass, so it can't sit there contradicting the list
+  below it. An `index.md` carries its folder's §8 gap findings there too: a
+  scan files those against the index's path, but only reaches them by walking
+  the folder tree, so opening one would otherwise make it the single file the
+  plugin under-reports — clean in the editor, flagged in the list below. The
+  status bar counts them for the same reason. The active note is deliberately
+  kept apart from the scan results rather than merged into them: those count
+  the vault, and one note's verdict arriving between scans would leave the
+  summary chips describing a vault nobody scanned.
+
+### Changed
+- The report pane groups findings by the folder they sit in. A row used to be a
+  bare file name, which said nothing about which of two same-named notes had
+  failed and nothing at all about an index finding — those name `index.md`.
+  Putting the whole path on every row fixed that, but then spent most of a
+  sidebar's width repeating the folder once per finding, so the folder is now
+  named once in a group header and the rows under it carry file names. Groups
+  sort errors-first like the rows inside them, start expanded, and collapse per
+  folder. The full path stays on each row's `aria-label`, so nothing has to
+  reconstruct it from whatever is rendered above; where a path is still shown in
+  full, the folder part is what ellipsizes when the pane is narrow, so the file
+  name stays readable at any width.
+- The report pane offers **Open note →** only when the path resolves to a file.
+  It was always shown and silently did nothing otherwise, which a gap report —
+  which names the `index.md` a folder hasn't got — would hit every time. It is
+  also left off the active-note section, which describes a note already open.
+
+### Internal
+- The listing a folder's contents call for, and the write of that listing, are
+  now separate steps, so the gap report and the generator read a folder the same
+  way. "Is this note already listed?" likewise has one implementation shared
+  between reporting a gap and closing it.
+
 ## [0.5.0] - 2026-07-31
 
 Three §5 trust signals that didn't do what they promised. The derived trust tier

@@ -52,6 +52,65 @@
   gap: 1px;
 }
 
+/* Folder groups: the header names the folder once so the rows under it can be
+   file names rather than the same path prefix over and over. */
+.okf-group + .okf-group {
+  margin-top: 5px;
+}
+.okf-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  cursor: pointer;
+  border-radius: 4px;
+  line-height: 1.5;
+}
+.okf-group-head:hover {
+  background: var(--background-modifier-hover);
+}
+.okf-group-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.okf-group-body {
+  padding-left: 12px;
+}
+
+/* The note in the editor, above the vault list and always open. */
+.okf-active {
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+.okf-active-title {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 1px;
+}
+.okf-active-clean {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 4px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+/* Same width as the caret it stands in for, so a clean note and a failing one
+   line their names up at the same column. */
+.okf-ok {
+  width: 10px;
+  flex: 0 0 auto;
+  color: var(--text-success);
+}
+
 .okf-file-block {
   border-radius: 4px;
 }
@@ -84,8 +143,25 @@
 .okf-dot.warning {
   background: var(--text-warning);
 }
-.okf-file-name {
+.okf-file-label {
   flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+}
+/* Shrinks far more readily than the file name beside it, so a narrow pane
+   ellipsizes the folder path and leaves the name it ends in legible. */
+.okf-file-dir {
+  flex: 0 999 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
+}
+.okf-file-name {
+  flex: 0 1 auto;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

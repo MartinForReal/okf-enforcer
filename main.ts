@@ -26,6 +26,8 @@ import {
   sectionBlock,
   sectionSummary,
   mergeIndex,
+  unlistedEntries,
+  decodePath,
   renderIndex,
   sectionForType,
   INDEX_SECTIONS,
@@ -57,6 +59,9 @@ export default class OkfPlugin extends Plugin {
     null;
   private pendingResults: { results: FileResult[]; scanned: number } | null =
     null;
+  /** The active note's findings, kept here as well as in the pane so a report
+   *  opened later starts out pointed at the note already in the editor. */
+  private activeResult: { path: string; issues: OkfIssue[] } | null = null;
 
   onload() {
     // Start from defaults synchronously so onload returns void (the type
@@ -168,6 +173,9 @@ export default class OkfPlugin extends Plugin {
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => {
         if (file && file.extension === "md") void this.validateActive(file, false);
+        // Anything else in the editor — a PDF, an image, nothing at all — has
+        // no OKF verdict to show, so the pane stops claiming one.
+        else this.setActiveResult(null);
       })
     );
 
@@ -438,7 +446,13 @@ export default class OkfPlugin extends Plugin {
       this.isRoot(file),
       this.settings
     );
+    // A gap belongs to the folder rather than to the index describing it, so a
+    // scan finds it in a pass of its own. Repeated here, or the note you have
+    // open is the one file the plugin under-reports: the same `index.md` would
+    // carry gaps in the list below that its own verdict had dropped.
+    issues.push(...(await this.indexGapsForActive(file)));
     this.updateStatus(issues, content);
+    this.setActiveResult({ path: file.path, issues });
     if (openReport) {
       this.renderResults(issues.length ? [{ path: file.path, issues }] : [], 1);
       void this.activateView();
@@ -527,8 +541,38 @@ export default class OkfPlugin extends Plugin {
         },
         silent ? undefined : "OKF: scanning"
       );
+      // An index gap belongs to a folder rather than to any note in it, so it
+      // takes a second pass over the folder tree. Findings are merged onto the
+      // index's own path, so a listing that is both malformed and incomplete is
+      // one entry in the report instead of two.
+      if (this.settings.reportIndexGaps) {
+        const byPath = new Map(results.map((r) => [r.path, r]));
+        await this.processQueue(
+          this.indexableFolders(),
+          async (folder) => {
+            const gaps = await this.indexGapsForFolder(folder);
+            if (!gaps) return;
+            const at = byPath.get(gaps.path);
+            if (at) at.issues.push(...gaps.issues);
+            else {
+              byPath.set(gaps.path, gaps);
+              results.push(gaps);
+            }
+          },
+          silent ? undefined : "OKF: checking indexes"
+        );
+      }
       results.sort((a, b) => a.path.localeCompare(b.path));
       this.renderResults(results, files.length);
+      // The scan just re-validated the active note along with everything else,
+      // index gaps included, so its verdict comes from the same pass. Left
+      // alone, the pane's active section would sit there contradicting the
+      // list below it after a Fix all.
+      const active = this.app.workspace.getActiveFile();
+      if (active && files.some((f) => f.path === active.path)) {
+        const hit = results.find((r) => r.path === active.path);
+        this.setActiveResult({ path: active.path, issues: hit ? hit.issues : [] });
+      }
       const errFiles = results.filter((r) =>
         r.issues.some((i) => i.severity === "error")
       ).length;
@@ -555,6 +599,17 @@ export default class OkfPlugin extends Plugin {
     } else {
       this.pendingResults = { results, scanned };
     }
+  }
+
+  /**
+   * Hand the active note's findings to the report pane, which lists them in a
+   * section of their own. They are deliberately not merged into the scan
+   * results: those count the vault, and one note's verdict arriving between
+   * scans would have the summary chips reporting a vault nobody scanned.
+   */
+  private setActiveResult(r: { path: string; issues: OkfIssue[] } | null) {
+    this.activeResult = r;
+    this.getReportView()?.setActive(r?.path ?? null, r?.issues ?? []);
   }
 
   async fixFile(file: TFile, notify: boolean): Promise<number> {
@@ -691,6 +746,28 @@ export default class OkfPlugin extends Plugin {
         ? ""
         : sectionBlock(current, this.settings.indexSubdirDescSection);
 
+    const entries = await this.indexEntriesFor(folder, true);
+    return await this.writeIndex(
+      folder,
+      indexPath,
+      current,
+      kept,
+      entries,
+      notify
+    );
+  }
+
+  /**
+   * The §8 listing a folder's contents call for, in the order they would be
+   * written. `fillMissingChildren` writes a subfolder's own `index.md` when it
+   * hasn't got one, so the entry linking at it points at a file that is there;
+   * a caller that only means to look — the gap report — passes false and leaves
+   * the vault untouched.
+   */
+  private async indexEntriesFor(
+    folder: TFolder,
+    fillMissingChildren: boolean
+  ): Promise<IndexEntry[]> {
     const children = folder.children;
     // Notes are grouped by their `type`, so the listing says what the directory
     // holds. Keyed by the heading rather than the raw type, which folds
@@ -751,8 +828,8 @@ export default class OkfPlugin extends Plugin {
           `${child.path}/index.md`
         );
         if (
-          !(childIndex instanceof TFile) ||
-          this.indexesMissingBelow(child)
+          fillMissingChildren &&
+          (!(childIndex instanceof TFile) || this.indexesMissingBelow(child))
         ) {
           await this.generateIndexForFolder(child, false);
           childIndex = this.app.vault.getAbstractFileByPath(
@@ -794,7 +871,21 @@ export default class OkfPlugin extends Plugin {
       if (!at) sections.set(section.toLowerCase(), [...group]);
       else for (const e of group) at.push({ ...e, section: at[0].section });
     }
-    const entries = [...sections.values()].flat();
+    return [...sections.values()].flat();
+  }
+
+  /**
+   * Writes a folder's `index.md` from the listing its contents call for, and
+   * reports whether the file changed on disk.
+   */
+  private async writeIndex(
+    folder: TFolder,
+    indexPath: string,
+    current: string | null,
+    kept: string,
+    entries: IndexEntry[],
+    notify: boolean
+  ): Promise<boolean> {
     // §8 makes an index optional, but a folder that has one is navigable and a
     // folder that doesn't is a dead end in its parent's listing. So every
     // folder gets one, including an empty and a newly created folder — there is
@@ -821,6 +912,7 @@ export default class OkfPlugin extends Plugin {
         out = `---\nokf_version: "${OKF_VERSION}"\n---\n\n${out}`;
       }
     }
+    const existing = this.app.vault.getAbstractFileByPath(indexPath);
     if (existing instanceof TFile) {
       if (current === out) return false;
       this.selfWrites.add(indexPath);
@@ -831,6 +923,81 @@ export default class OkfPlugin extends Plugin {
     }
     if (notify) new Notice(`OKF: wrote ${indexPath}`);
     return true;
+  }
+
+  /**
+   * What a folder's listing is missing, reported rather than written: no
+   * `index.md` at all, or notes the one there names nowhere in the file. For a
+   * vault that keeps its listings by hand — its own headings, its own order,
+   * its own groupings — where generating over them writes a shape the vault
+   * didn't choose.
+   *
+   * Both are warnings. §8 makes an index optional and §11 forbids failing a
+   * bundle for a missing one, so this says a vault's own convention has slipped,
+   * not that the bundle is non-conformant.
+   *
+   * Findings are filed against the index's path, which is the file to edit, and
+   * reads as "this should be here" in the case where it isn't.
+   */
+  private async indexGapsForFolder(
+    folder: TFolder
+  ): Promise<FileResult | null> {
+    const root = folder.path === "/" || folder.path === "";
+    const indexPath = root ? "index.md" : `${folder.path}/index.md`;
+    const index = this.app.vault.getAbstractFileByPath(indexPath);
+    if (!(index instanceof TFile)) {
+      return {
+        path: indexPath,
+        issues: [
+          {
+            severity: "warning",
+            rule: "§8",
+            message: `Folder \`${
+              root ? "/" : folder.path
+            }\` has no \`index.md\`, so nothing says what it holds.`,
+          },
+        ],
+      };
+    }
+    // Nothing is filled in on the way past: a check that writes an index in
+    // order to decide whether an index is missing has answered its own question.
+    const entries = await this.indexEntriesFor(folder, false);
+    if (entries.length === 0) return null;
+    const base = root ? "" : `${folder.path}/`;
+    const unlisted = unlistedEntries(
+      await this.app.vault.cachedRead(index),
+      entries,
+      (target) => this.app.vault.getAbstractFileByPath(base + target) !== null
+    );
+    if (unlisted.length === 0) return null;
+    return {
+      path: indexPath,
+      issues: unlisted.map((e) => ({
+        severity: "warning" as const,
+        rule: "§8",
+        message: `\`index.md\` doesn't list \`${decodePath(e.link)}\`.`,
+      })),
+    };
+  }
+
+  /**
+   * The §8 gap findings for the folder an `index.md` describes, and nothing for
+   * any other note. A scan reaches these by walking the folder tree, which is a
+   * route a single open file hasn't got; without them the verdict on the note
+   * in the editor is a strict subset of the row the scan gives that same path,
+   * and the pane contradicts itself about one file.
+   *
+   * Guarded on the predicate the scan's own walk prunes by, so a folder the
+   * scan would never reach — excluded, or under Obsidian's config dir — doesn't
+   * acquire findings merely by being open.
+   */
+  private async indexGapsForActive(file: TFile): Promise<OkfIssue[]> {
+    if (!this.settings.reportIndexGaps) return [];
+    if (isReserved(file.path) !== "index") return [];
+    const folder = file.parent;
+    if (!folder || !this.folderIsIndexable(folder)) return [];
+    const gaps = await this.indexGapsForFolder(folder);
+    return gaps ? gaps.issues : [];
   }
 
   /**
@@ -878,6 +1045,25 @@ export default class OkfPlugin extends Plugin {
     return false;
   }
 
+  /**
+   * Every folder this plugin treats as part of the bundle, the root included.
+   * The folder tree is walked rather than the notes in it: a folder that holds
+   * no notes — empty, or nothing but subfolders — still gets an index, so there
+   * is nothing to find it by except the tree itself.
+   */
+  private indexableFolders(): TFolder[] {
+    const list: TFolder[] = [];
+    const walk = (folder: TFolder) => {
+      if (!this.folderIsIndexable(folder)) return;
+      list.push(folder);
+      for (const child of folder.children) {
+        if (child instanceof TFolder) walk(child);
+      }
+    };
+    walk(this.app.vault.getRoot());
+    return list;
+  }
+
   async generateAllIndexes(silent = false) {
     if (this.busy) {
       if (!silent) new Notice("OKF: a scan/fix is already running…");
@@ -885,18 +1071,7 @@ export default class OkfPlugin extends Plugin {
     }
     this.busy = true;
     try {
-      // Walk the folder tree rather than the notes in it. A folder that holds
-      // no notes — empty, or nothing but subfolders — still gets an index, so
-      // there is nothing to find it by except the tree itself.
-      const list: TFolder[] = [];
-      const walk = (folder: TFolder) => {
-        if (!this.folderIsIndexable(folder)) return;
-        list.push(folder);
-        for (const child of folder.children) {
-          if (child instanceof TFolder) walk(child);
-        }
-      };
-      walk(this.app.vault.getRoot());
+      const list = this.indexableFolders();
       // Deepest folders first: a parent links to — and quotes the description
       // section of — its children's index.md, so those must be in place before
       // the parent listing is written.
@@ -982,6 +1157,9 @@ export default class OkfPlugin extends Plugin {
         );
         this.pendingResults = null;
       }
+      // A pane built just now has never been told what is open; the file-open
+      // that would have told it fired before there was anything to tell.
+      this.setActiveResult(this.activeResult);
     }
   }
 }
@@ -1144,6 +1322,17 @@ class OkfSettingTab extends PluginSettingTab {
                 s.indexSubdirDescSection = v.trim();
                 save();
               })
+          ),
+      },
+      {
+        name: "Report index gaps",
+        desc: "Off (default). On: a vault scan warns where a folder has no index.md, and where one it has doesn't list a note anywhere in the file — under any heading, in any order. It only reports; nothing is written. For a vault whose listings are kept by hand, where generating over them writes a shape you didn't choose. With \"Auto-generate index.md\" on there will rarely be a gap left to find.",
+        control: (row) =>
+          row.addToggle((tg) =>
+            tg.setValue(s.reportIndexGaps).onChange((v) => {
+              s.reportIndexGaps = v;
+              save();
+            })
           ),
       },
       { name: "Rules", heading: true },
