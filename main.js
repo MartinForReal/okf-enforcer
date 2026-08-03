@@ -1170,13 +1170,27 @@ function migrateCitations(body) {
 // report-view.ts
 var import_obsidian2 = require("obsidian");
 var OKF_VIEW_TYPE = "okf-report-view";
+function dirOf(path) {
+  const cut = path.lastIndexOf("/");
+  return cut >= 0 ? path.slice(0, cut) : "";
+}
+function hasError(r) {
+  return r.issues.some((i) => i.severity === "error");
+}
 var OkfReportView = class extends import_obsidian2.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.results = [];
     this.scanned = 0;
-    /** Paths whose group is expanded. Default collapsed → empty set. */
+    /** Paths whose file block is expanded. Default collapsed → empty set. */
     this.expanded = /* @__PURE__ */ new Set();
+    /** Folders whose group is collapsed. Default expanded → empty set: a group
+     *  header is there to say where its findings live, not to hide them. */
+    this.collapsed = /* @__PURE__ */ new Set();
+    /** The note in the editor and its findings, held apart from the scan so the
+     *  summary keeps counting the vault while this follows the tab. */
+    this.activePath = null;
+    this.activeIssues = [];
     // Persistent skeleton elements (built once, survive list re-renders).
     this.progressWrap = null;
     this.progressBar = null;
@@ -1244,6 +1258,15 @@ var OkfReportView = class extends import_obsidian2.ItemView {
     this.scanned = scanned;
     const paths = new Set(results.map((r) => r.path));
     for (const p of [...this.expanded]) if (!paths.has(p)) this.expanded.delete(p);
+    const dirs = new Set(results.map((r) => dirOf(r.path)));
+    for (const d of [...this.collapsed]) if (!dirs.has(d)) this.collapsed.delete(d);
+    this.renderBody();
+  }
+  /** Point the pane at the note in the editor. Pass null when what is open is
+   *  not a markdown note. */
+  setActive(path, issues) {
+    this.activePath = path;
+    this.activeIssues = issues;
     this.renderBody();
   }
   /** Re-render only the summary + file list (leaves toolbar/progress intact). */
@@ -1253,15 +1276,40 @@ var OkfReportView = class extends import_obsidian2.ItemView {
     }
     const b = this.bodyEl;
     b.empty();
-    const errorFiles = this.results.filter(
-      (r) => r.issues.some((i) => i.severity === "error")
-    ).length;
+    this.renderSummary(b);
+    this.renderActive(b);
+    this.renderList(b);
+  }
+  renderSummary(b) {
+    const errorFiles = this.results.filter(hasError).length;
     const warnFiles = this.results.length - errorFiles;
     const passFiles = this.scanned - this.results.length;
     const summary = b.createDiv({ cls: "okf-summary" });
     summary.createSpan({ cls: "okf-chip okf-pass", text: `\u2713 ${passFiles}` });
     summary.createSpan({ cls: "okf-chip okf-error", text: `\u2716 ${errorFiles}` });
     summary.createSpan({ cls: "okf-chip okf-warn", text: `\u26A0 ${warnFiles}` });
+  }
+  /**
+   * The note in the editor, listed open in a section of its own. Hunting the
+   * vault list for the row of the note you are already looking at is the long
+   * way round, and it only works if that note happened to be failing when the
+   * last scan ran — before the first scan there is no list to hunt at all.
+   */
+  renderActive(b) {
+    const path = this.activePath;
+    if (!path) return;
+    const sec = b.createDiv({ cls: "okf-active" });
+    sec.createDiv({ cls: "okf-active-title", text: "Active note" });
+    if (!this.activeIssues.length) {
+      const line = sec.createDiv({ cls: "okf-active-clean" });
+      line.setAttribute("aria-label", `${path} \u2014 no issues`);
+      line.createSpan({ cls: "okf-ok", text: "\u2713" });
+      this.renderLabel(line, path, true);
+      return;
+    }
+    this.renderFileBlock(sec, { path, issues: this.activeIssues }, "active");
+  }
+  renderList(b) {
     if (this.scanned === 0) {
       b.createDiv({ cls: "okf-empty", text: "No scan yet \u2014 click Rescan." });
       return;
@@ -1270,62 +1318,111 @@ var OkfReportView = class extends import_obsidian2.ItemView {
       b.createDiv({ cls: "okf-empty", text: "\u2713 All notes conform." });
       return;
     }
-    const sorted = [...this.results].sort((a, b2) => {
-      const ae = a.issues.some((i) => i.severity === "error") ? 0 : 1;
-      const be = b2.issues.some((i) => i.severity === "error") ? 0 : 1;
+    const groups = /* @__PURE__ */ new Map();
+    for (const r of this.results) {
+      const dir = dirOf(r.path);
+      const at = groups.get(dir);
+      if (at) at.push(r);
+      else groups.set(dir, [r]);
+    }
+    const dirs = [...groups.keys()].sort((a, b2) => {
+      const ae = groups.get(a).some(hasError) ? 0 : 1;
+      const be = groups.get(b2).some(hasError) ? 0 : 1;
       if (ae !== be) return ae - be;
-      return a.path.localeCompare(b2.path);
+      return a.localeCompare(b2);
     });
     const list = b.createDiv({ cls: "okf-list" });
-    for (const r of sorted) {
-      const isErr = r.issues.some((i) => i.severity === "error");
-      const isOpen = this.expanded.has(r.path);
-      const block = list.createDiv({ cls: "okf-file-block" });
-      const head = block.createDiv({ cls: "okf-file-head" });
-      head.setAttribute("aria-label", r.path);
+    for (const dir of dirs) {
+      const rows = groups.get(dir).sort((a, b2) => {
+        const ae = hasError(a) ? 0 : 1;
+        const be = hasError(b2) ? 0 : 1;
+        if (ae !== be) return ae - be;
+        return a.path.localeCompare(b2.path);
+      });
+      const isOpen = !this.collapsed.has(dir);
+      const group = list.createDiv({ cls: "okf-group" });
+      const head = group.createDiv({ cls: "okf-group-head" });
+      head.setAttribute("aria-label", dir || "Vault root");
       head.createSpan({ cls: "okf-caret", text: isOpen ? "\u25BE" : "\u25B8" });
-      head.createSpan({ cls: `okf-dot ${isErr ? "error" : "warning"}` });
-      const cut = r.path.lastIndexOf("/");
-      const label = head.createSpan({ cls: "okf-file-label" });
-      if (cut >= 0) {
-        label.createSpan({
-          cls: "okf-file-dir",
-          text: r.path.slice(0, cut + 1)
-        });
-      }
-      label.createSpan({ cls: "okf-file-name", text: r.path.slice(cut + 1) });
-      head.createSpan({ cls: "okf-count", text: String(r.issues.length) });
+      head.createSpan({ cls: "okf-group-name", text: dir ? `${dir}/` : "/" });
+      head.createSpan({
+        cls: "okf-count",
+        text: String(rows.reduce((n, r) => n + r.issues.length, 0))
+      });
+      head.onclick = () => {
+        if (this.collapsed.has(dir)) this.collapsed.delete(dir);
+        else this.collapsed.add(dir);
+        this.renderBody();
+      };
+      if (!isOpen) continue;
+      const body = group.createDiv({ cls: "okf-group-body" });
+      for (const r of rows) this.renderFileBlock(body, r, "list");
+    }
+  }
+  /**
+   * One file's findings. In the list the group header above already names the
+   * folder, so the row shows the file name alone; the active-note section
+   * stands on its own and shows the whole path. Either way the head's
+   * aria-label is the full path, so nothing has to reconstruct it from
+   * whatever happens to be rendered above.
+   */
+  renderFileBlock(host, r, mode) {
+    const inList = mode === "list";
+    const isErr = hasError(r);
+    const isOpen = inList ? this.expanded.has(r.path) : true;
+    const block = host.createDiv({ cls: "okf-file-block" });
+    const head = block.createDiv({ cls: "okf-file-head" });
+    head.setAttribute("aria-label", r.path);
+    head.createSpan({
+      cls: "okf-caret",
+      text: inList ? isOpen ? "\u25BE" : "\u25B8" : ""
+    });
+    head.createSpan({ cls: `okf-dot ${isErr ? "error" : "warning"}` });
+    this.renderLabel(head, r.path, !inList);
+    head.createSpan({ cls: "okf-count", text: String(r.issues.length) });
+    if (inList)
       head.onclick = () => {
         if (this.expanded.has(r.path)) this.expanded.delete(r.path);
         else this.expanded.add(r.path);
         this.renderBody();
       };
-      if (isOpen) {
-        const body = block.createDiv({ cls: "okf-issues" });
-        for (const issue of r.issues) {
-          const row = body.createDiv({ cls: "okf-issue" });
-          row.createSpan({
-            cls: `okf-sev ${issue.severity}`,
-            text: issue.severity === "error" ? "\u2716" : "\u26A0"
-          });
-          const txt = row.createSpan({ cls: "okf-issue-text" });
-          txt.createSpan({ text: issue.message + " " });
-          txt.createSpan({ cls: "okf-rule", text: issue.rule });
-          if (issue.fix) txt.createSpan({ cls: "okf-fixable", text: " \xB7 fixable" });
-        }
-        const target = this.app.vault.getAbstractFileByPath(r.path);
-        if (target instanceof import_obsidian2.TFile) {
-          const open = block.createEl("a", {
-            cls: "okf-open-link",
-            text: "Open note \u2192"
-          });
-          open.onclick = (e) => {
-            e.preventDefault();
-            void this.app.workspace.getLeaf(false).openFile(target);
-          };
-        }
-      }
+    if (!isOpen) return;
+    const body = block.createDiv({ cls: "okf-issues" });
+    for (const issue of r.issues) {
+      const row = body.createDiv({ cls: "okf-issue" });
+      row.createSpan({
+        cls: `okf-sev ${issue.severity}`,
+        text: issue.severity === "error" ? "\u2716" : "\u26A0"
+      });
+      const txt = row.createSpan({ cls: "okf-issue-text" });
+      txt.createSpan({ text: issue.message + " " });
+      txt.createSpan({ cls: "okf-rule", text: issue.rule });
+      if (issue.fix) txt.createSpan({ cls: "okf-fixable", text: " \xB7 fixable" });
     }
+    if (!inList) return;
+    const target = this.app.vault.getAbstractFileByPath(r.path);
+    if (target instanceof import_obsidian2.TFile) {
+      const open = block.createEl("a", {
+        cls: "okf-open-link",
+        text: "Open note \u2192"
+      });
+      open.onclick = (e) => {
+        e.preventDefault();
+        void this.app.workspace.getLeaf(false).openFile(target);
+      };
+    }
+  }
+  /**
+   * A path as a muted folder part plus the file name, or the name alone when
+   * the group header above already carries the folder. The folder part is what
+   * gives way when the pane is narrow, so the name stays readable at any width.
+   */
+  renderLabel(head, path, withDir) {
+    const cut = path.lastIndexOf("/");
+    const label = head.createSpan({ cls: "okf-file-label" });
+    if (withDir && cut >= 0)
+      label.createSpan({ cls: "okf-file-dir", text: path.slice(0, cut + 1) });
+    label.createSpan({ cls: "okf-file-name", text: path.slice(cut + 1) });
   }
 };
 
@@ -1342,6 +1439,9 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
     this.layoutReady = false;
     this.lastSummary = null;
     this.pendingResults = null;
+    /** The active note's findings, kept here as well as in the pane so a report
+     *  opened later starts out pointed at the note already in the editor. */
+    this.activeResult = null;
     this.flushIndexes = (0, import_obsidian3.debounce)(
       async () => {
         if (!this.settings.autoGenerateIndex) return;
@@ -1466,6 +1566,7 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => {
         if (file && file.extension === "md") void this.validateActive(file, false);
+        else this.setActiveResult(null);
       })
     );
     this.registerEvent(
@@ -1661,6 +1762,7 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
       this.settings
     );
     this.updateStatus(issues, content);
+    this.setActiveResult({ path: file.path, issues });
     if (openReport) {
       this.renderResults(issues.length ? [{ path: file.path, issues }] : [], 1);
       void this.activateView();
@@ -1761,6 +1863,11 @@ Click to open the report`
       }
       results.sort((a, b) => a.path.localeCompare(b.path));
       this.renderResults(results, files.length);
+      const active = this.app.workspace.getActiveFile();
+      if (active && files.some((f) => f.path === active.path)) {
+        const hit = results.find((r) => r.path === active.path);
+        this.setActiveResult({ path: active.path, issues: hit ? hit.issues : [] });
+      }
       const errFiles = results.filter(
         (r) => r.issues.some((i) => i.severity === "error")
       ).length;
@@ -1784,6 +1891,17 @@ Click to open the report`
     } else {
       this.pendingResults = { results, scanned };
     }
+  }
+  /**
+   * Hand the active note's findings to the report pane, which lists them in a
+   * section of their own. They are deliberately not merged into the scan
+   * results: those count the vault, and one note's verdict arriving between
+   * scans would have the summary chips reporting a vault nobody scanned.
+   */
+  setActiveResult(r) {
+    var _a, _b, _c;
+    this.activeResult = r;
+    (_c = this.getReportView()) == null ? void 0 : _c.setActive((_a = r == null ? void 0 : r.path) != null ? _a : null, (_b = r == null ? void 0 : r.issues) != null ? _b : []);
   }
   async fixFile(file, notify) {
     const content = await this.app.vault.read(file);
@@ -2217,6 +2335,7 @@ ${entry}
         );
         this.pendingResults = null;
       }
+      this.setActiveResult(this.activeResult);
     }
   }
 };

@@ -59,6 +59,9 @@ export default class OkfPlugin extends Plugin {
     null;
   private pendingResults: { results: FileResult[]; scanned: number } | null =
     null;
+  /** The active note's findings, kept here as well as in the pane so a report
+   *  opened later starts out pointed at the note already in the editor. */
+  private activeResult: { path: string; issues: OkfIssue[] } | null = null;
 
   onload() {
     // Start from defaults synchronously so onload returns void (the type
@@ -170,6 +173,9 @@ export default class OkfPlugin extends Plugin {
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => {
         if (file && file.extension === "md") void this.validateActive(file, false);
+        // Anything else in the editor — a PDF, an image, nothing at all — has
+        // no OKF verdict to show, so the pane stops claiming one.
+        else this.setActiveResult(null);
       })
     );
 
@@ -441,6 +447,7 @@ export default class OkfPlugin extends Plugin {
       this.settings
     );
     this.updateStatus(issues, content);
+    this.setActiveResult({ path: file.path, issues });
     if (openReport) {
       this.renderResults(issues.length ? [{ path: file.path, issues }] : [], 1);
       void this.activateView();
@@ -552,6 +559,15 @@ export default class OkfPlugin extends Plugin {
       }
       results.sort((a, b) => a.path.localeCompare(b.path));
       this.renderResults(results, files.length);
+      // The scan just re-validated the active note along with everything else,
+      // index gaps included, so its verdict comes from the same pass. Left
+      // alone, the pane's active section would sit there contradicting the
+      // list below it after a Fix all.
+      const active = this.app.workspace.getActiveFile();
+      if (active && files.some((f) => f.path === active.path)) {
+        const hit = results.find((r) => r.path === active.path);
+        this.setActiveResult({ path: active.path, issues: hit ? hit.issues : [] });
+      }
       const errFiles = results.filter((r) =>
         r.issues.some((i) => i.severity === "error")
       ).length;
@@ -578,6 +594,17 @@ export default class OkfPlugin extends Plugin {
     } else {
       this.pendingResults = { results, scanned };
     }
+  }
+
+  /**
+   * Hand the active note's findings to the report pane, which lists them in a
+   * section of their own. They are deliberately not merged into the scan
+   * results: those count the vault, and one note's verdict arriving between
+   * scans would have the summary chips reporting a vault nobody scanned.
+   */
+  private setActiveResult(r: { path: string; issues: OkfIssue[] } | null) {
+    this.activeResult = r;
+    this.getReportView()?.setActive(r?.path ?? null, r?.issues ?? []);
   }
 
   async fixFile(file: TFile, notify: boolean): Promise<number> {
@@ -1105,6 +1132,9 @@ export default class OkfPlugin extends Plugin {
         );
         this.pendingResults = null;
       }
+      // A pane built just now has never been told what is open; the file-open
+      // that would have told it fired before there was anything to tell.
+      this.setActiveResult(this.activeResult);
     }
   }
 }

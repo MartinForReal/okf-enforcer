@@ -22,15 +22,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   generation writes a shape the vault didn't choose, but still wants to be told
   when a listing has fallen behind.
 
+- **The note you have open is listed in the report pane.** Opening a note now
+  puts its warnings and errors in a section of their own at the top of the
+  pane, listed open rather than behind a click. Opening a note has always
+  re-validated it, but the verdict went to the status bar alone — a count, with
+  the detail in a tooltip — while the pane went on showing whatever the last
+  vault scan had found, every row collapsed. Now the note in the editor is in
+  front of you whether or not it happened to be failing when that scan ran, and
+  whether or not a scan has ever run. A note with nothing wrong says so rather
+  than leaving the section blank, and a rescan or a **Fix all** re-reads the
+  section from the same pass, so it can't sit there contradicting the list
+  below it. The active note is deliberately kept apart from the scan results
+  rather than merged into them: those count the vault, and one note's verdict
+  arriving between scans would leave the summary chips describing a vault
+  nobody scanned.
+
 ### Changed
-- The report pane names each finding by its full vault-relative path instead of
-  the file name alone. Two notes named the same in different folders were one
-  row repeated, and an index finding — which names `index.md` — said nothing at
-  all about which folder it meant. The folder part is what ellipsizes when the
-  pane is narrow, so the file name stays readable at any width.
+- The report pane groups findings by the folder they sit in. A row used to be a
+  bare file name, which said nothing about which of two same-named notes had
+  failed and nothing at all about an index finding — those name `index.md`.
+  Putting the whole path on every row fixed that, but then spent most of a
+  sidebar's width repeating the folder once per finding, so the folder is now
+  named once in a group header and the rows under it carry file names. Groups
+  sort errors-first like the rows inside them, start expanded, and collapse per
+  folder. The full path stays on each row's `aria-label`, so nothing has to
+  reconstruct it from whatever is rendered above; where a path is still shown in
+  full, the folder part is what ellipsizes when the pane is narrow, so the file
+  name stays readable at any width.
 - The report pane offers **Open note →** only when the path resolves to a file.
   It was always shown and silently did nothing otherwise, which a gap report —
-  which names the `index.md` a folder hasn't got — would hit every time.
+  which names the `index.md` a folder hasn't got — would hit every time. It is
+  also left off the active-note section, which describes a note already open.
 
 ### Internal
 - The listing a folder's contents call for, and the write of that listing, are
