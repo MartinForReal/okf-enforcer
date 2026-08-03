@@ -140,8 +140,20 @@ export class OkfReportView extends ItemView {
       head.setAttribute("aria-label", r.path);
       head.createSpan({ cls: "okf-caret", text: isOpen ? "▾" : "▸" });
       head.createSpan({ cls: `okf-dot ${isErr ? "error" : "warning"}` });
-      const name = r.path.split("/").pop() || r.path;
-      head.createSpan({ cls: "okf-file-name", text: name });
+      // The whole vault-relative path, not just the file name: two notes named
+      // the same in different folders are otherwise one row repeated, and an
+      // index.md finding names the folder it belongs to or says nothing at all.
+      // The folder part is what gives way when the pane is narrow, so the file
+      // name stays readable at any width.
+      const cut = r.path.lastIndexOf("/");
+      const label = head.createSpan({ cls: "okf-file-label" });
+      if (cut >= 0) {
+        label.createSpan({
+          cls: "okf-file-dir",
+          text: r.path.slice(0, cut + 1),
+        });
+      }
+      label.createSpan({ cls: "okf-file-name", text: r.path.slice(cut + 1) });
       head.createSpan({ cls: "okf-count", text: String(r.issues.length) });
 
       head.onclick = () => {

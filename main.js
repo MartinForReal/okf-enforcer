@@ -1285,8 +1285,15 @@ var OkfReportView = class extends import_obsidian2.ItemView {
       head.setAttribute("aria-label", r.path);
       head.createSpan({ cls: "okf-caret", text: isOpen ? "\u25BE" : "\u25B8" });
       head.createSpan({ cls: `okf-dot ${isErr ? "error" : "warning"}` });
-      const name = r.path.split("/").pop() || r.path;
-      head.createSpan({ cls: "okf-file-name", text: name });
+      const cut = r.path.lastIndexOf("/");
+      const label = head.createSpan({ cls: "okf-file-label" });
+      if (cut >= 0) {
+        label.createSpan({
+          cls: "okf-file-dir",
+          text: r.path.slice(0, cut + 1)
+        });
+      }
+      label.createSpan({ cls: "okf-file-name", text: r.path.slice(cut + 1) });
       head.createSpan({ cls: "okf-count", text: String(r.issues.length) });
       head.onclick = () => {
         if (this.expanded.has(r.path)) this.expanded.delete(r.path);

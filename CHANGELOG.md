@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when a listing has fallen behind.
 
 ### Changed
+- The report pane names each finding by its full vault-relative path instead of
+  the file name alone. Two notes named the same in different folders were one
+  row repeated, and an index finding — which names `index.md` — said nothing at
+  all about which folder it meant. The folder part is what ellipsizes when the
+  pane is narrow, so the file name stays readable at any width.
 - The report pane offers **Open note →** only when the path resolves to a file.
   It was always shown and silently did nothing otherwise, which a gap report —
   which names the `index.md` a folder hasn't got — would hit every time.

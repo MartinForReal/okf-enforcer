@@ -84,8 +84,25 @@
 .okf-dot.warning {
   background: var(--text-warning);
 }
-.okf-file-name {
+.okf-file-label {
   flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+}
+/* Shrinks far more readily than the file name beside it, so a narrow pane
+   ellipsizes the folder path and leaves the name it ends in legible. */
+.okf-file-dir {
+  flex: 0 999 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
+}
+.okf-file-name {
+  flex: 0 1 auto;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
