@@ -36,12 +36,22 @@ jobs:
             styles.css
             manifest.json
 
-      - name: Create release
+      - name: Create or update release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ github.ref_name }}
         run: |
-          gh release create "$tag" \
-            --title="$tag" \
-            --generate-notes \
-            main.js manifest.json styles.css
+          # The release may already exist: publishing one from the GitHub UI
+          # creates the tag too, and that tag push is what started this run.
+          # `gh release create` fails on it, leaving a release with no assets —
+          # the one outcome worth avoiding, since a plugin release without
+          # main.js is useless to Obsidian. Upload onto it instead. --clobber
+          # also makes re-running a half-finished job safe.
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" main.js manifest.json styles.css --clobber
+          else
+            gh release create "$tag" \
+              --title="$tag" \
+              --generate-notes \
+              main.js manifest.json styles.css
+          fi
