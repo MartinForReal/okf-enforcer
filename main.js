@@ -161,14 +161,15 @@ var OKF_KNOWN_VERSIONS = ["0.1", "0.2"];
 var OKF_STATUSES = ["draft", "stable", "deprecated"];
 var ACTOR_RE = /^(human:.+|process:.+|[^/\s]+\/[^/\s]+)$/;
 var ISO_DATETIME_RE = /^\d{4}-\d{2}-\d{2}T/;
+var WARNABLE_FIELDS = ["title", "description", "generated", "tags"];
 var DEFAULT_SETTINGS = {
   defaultType: "Concept",
   defaultActor: "okf-enforcer/0.5",
-  warnRecommendedFields: true,
+  // `tags` left out: §4.1 recommends the other three, and the spec never asks
+  // for tags.
+  warnMissingFields: ["title", "description", "generated"],
   warnTrustFields: false,
   checkAttestedComputation: true,
-  warnTagsField: false,
-  warnBrokenLinks: false,
   liveCheckOnSave: true,
   scanOnStartup: true,
   fixOnSave: true,
@@ -679,22 +680,23 @@ function validateConcept(path, content, settings) {
     }
     issues.push(issue);
   }
-  if (settings.warnRecommendedFields) {
-    if (!hasNonEmpty2(data, "title")) {
-      issues.push({
-        severity: "warning",
-        rule: "\xA74.1",
-        message: "Recommended `title` missing. Consumers may fall back to the filename.",
-        fix: "add-title"
-      });
-    }
-    if (!hasNonEmpty2(data, "description")) {
-      issues.push({
-        severity: "warning",
-        rule: "\xA74.1",
-        message: "Recommended `description` (one-line summary) missing. Used in index listings, search snippets, and previews."
-      });
-    }
+  const warnFor = new Set(settings.warnMissingFields);
+  if (warnFor.has("title") && !hasNonEmpty2(data, "title")) {
+    issues.push({
+      severity: "warning",
+      rule: "\xA74.1",
+      message: "Recommended `title` missing. Consumers may fall back to the filename.",
+      fix: "add-title"
+    });
+  }
+  if (warnFor.has("description") && !hasNonEmpty2(data, "description")) {
+    issues.push({
+      severity: "warning",
+      rule: "\xA74.1",
+      message: "Recommended `description` (one-line summary) missing. Used in index listings, search snippets, and previews."
+    });
+  }
+  if (warnFor.has("generated")) {
     const generated = data["generated"];
     const hasGenerated = generated !== null && typeof generated === "object";
     const legacyTs = data["timestamp"];
@@ -737,7 +739,7 @@ function validateConcept(path, content, settings) {
       });
     }
   }
-  if (settings.warnTagsField && !("tags" in data)) {
+  if (warnFor.has("tags") && !("tags" in data)) {
     issues.push({
       severity: "warning",
       rule: "\xA74.1",
@@ -1630,7 +1632,21 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
   }
   async loadSettings() {
     const saved = await this.loadData();
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, saved != null ? saved : {});
+    this.settings = { ...DEFAULT_SETTINGS };
+    if (!saved) return;
+    for (const key of Object.keys(DEFAULT_SETTINGS)) {
+      if (saved[key] !== void 0) {
+        this.settings[key] = saved[key];
+      }
+    }
+    if (saved["warnMissingFields"] === void 0) {
+      const fields = [];
+      if (saved["warnRecommendedFields"] !== false) {
+        fields.push("title", "description", "generated");
+      }
+      if (saved["warnTagsField"] === true) fields.push("tags");
+      this.settings.warnMissingFields = fields;
+    }
   }
   async saveSettings() {
     await this.saveData(this.settings);
@@ -2373,6 +2389,34 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
     const s = this.plugin.settings;
     const save = () => void this.plugin.saveSettings();
     const list = (v) => v.split(",").map((x) => x.trim()).filter(Boolean);
+    const saveMode = () => s.fixOnSave ? "fix" : s.liveCheckOnSave ? "check" : "off";
+    const indexMode = () => s.autoGenerateIndex ? s.generateIndexOnStartup ? "startup" : "write" : s.reportIndexGaps ? "report" : "ignore";
+    const portentChecks = () => [
+      s.portentCheckTypeVocab && "type",
+      s.portentCheckLifecycle && "lifecycle",
+      s.portentCheckBelongsTo && "belongs_to",
+      s.portentCheckRelatedTo && "related_to"
+    ].filter(Boolean).join(", ");
+    const FIELD_KEYS = {
+      status: "portentStatusField",
+      organized: "portentOrganizedField",
+      archived: "portentArchivedField",
+      belongs_to: "portentBelongsToField",
+      related_to: "portentRelatedToField"
+    };
+    const fieldOverrides = () => Object.entries(FIELD_KEYS).filter(([concept, key]) => s[key] !== concept).map(([concept, key]) => `${concept}=${s[key]}`).join(", ");
+    const applyFieldOverrides = (pairs) => {
+      for (const [concept, key] of Object.entries(FIELD_KEYS)) s[key] = concept;
+      for (const pair of pairs) {
+        const eq = pair.indexOf("=");
+        if (eq < 0) continue;
+        const concept = pair.slice(0, eq).trim();
+        const name = pair.slice(eq + 1).trim();
+        if (name && concept in FIELD_KEYS) {
+          s[FIELD_KEYS[concept]] = name;
+        }
+      }
+    };
     return [
       {
         name: "Default type for auto-fix",
@@ -2394,33 +2438,28 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
           })
         )
       },
+      { name: "Automation", heading: true },
       {
-        name: "Live check on save / open",
-        desc: "Validate the active note as you edit and when you open it.",
-        control: (row) => row.addToggle(
-          (tg) => tg.setValue(s.liveCheckOnSave).onChange((v) => {
-            s.liveCheckOnSave = v;
+        name: "On save",
+        desc: 'What happens when you edit a note. "Check" validates it and updates the status bar; "Check and fix" also inserts the missing OKF frontmatter (`type`, `title`, `generated`), never overwriting a value you\'ve set. A note is always validated when you *open* it, whichever this is set to.',
+        control: (row) => row.addDropdown(
+          (d) => d.addOptions({
+            off: "Do nothing",
+            check: "Check the note",
+            fix: "Check and fix"
+          }).setValue(saveMode()).onChange((v) => {
+            s.fixOnSave = v === "fix";
+            s.liveCheckOnSave = v !== "off";
             save();
           })
         )
       },
-      { name: "Automation", heading: true },
       {
         name: "Scan vault on startup",
         desc: "Scan the whole vault for conformance when the plugin loads, once the workspace is ready.",
         control: (row) => row.addToggle(
           (tg) => tg.setValue(s.scanOnStartup).onChange((v) => {
             s.scanOnStartup = v;
-            save();
-          })
-        )
-      },
-      {
-        name: "Fix format issues on save",
-        desc: "Insert missing OKF frontmatter (`type`, `title`, `generated`) when you edit a note. Never overwrites a value you've set.",
-        control: (row) => row.addToggle(
-          (tg) => tg.setValue(s.fixOnSave).onChange((v) => {
-            s.fixOnSave = v;
             save();
           })
         )
@@ -2437,21 +2476,18 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
       },
       { name: "index.md", heading: true },
       {
-        name: "Auto-generate index.md",
-        desc: `Keep every folder's index.md (its \xA78 listing) current as notes are added, renamed, and deleted \u2014 including the listings above it, since a parent describes its subfolders by what they hold. Every folder gets an index, an empty one included; the config folder and "Excluded folders" are left alone.`,
-        control: (row) => row.addToggle(
-          (tg) => tg.setValue(s.autoGenerateIndex).onChange((v) => {
-            s.autoGenerateIndex = v;
-            save();
-          })
-        )
-      },
-      {
-        name: "Generate index.md on startup",
-        desc: 'Bring every index up to date once when the plugin loads, for what changed while Obsidian was closed \u2014 a vault synced from another machine, or edited outside it. Runs quietly, before the startup scan. Off by default; needs "Auto-generate index.md" on.',
-        control: (row) => row.addToggle(
-          (tg) => tg.setValue(s.generateIndexOnStartup).onChange((v) => {
-            s.generateIndexOnStartup = v;
+        name: "Incomplete index.md",
+        desc: `What to do about a folder with no \xA78 listing, or one that doesn't name everything in the folder. "Report" warns in the vault scan and writes nothing \u2014 for a vault whose listings are kept by hand, where generating over them writes a shape you didn't choose. The two "Write" modes keep every folder's index current as notes are added, renamed, and deleted, including the listings above it; the second also brings them up to date once at startup, for what changed while Obsidian was closed. The config folder and "Excluded folders" are always left alone, and the "Generate/refresh index.md" commands write whatever this is set to.`,
+        control: (row) => row.addDropdown(
+          (d) => d.addOptions({
+            ignore: "Ignore",
+            report: "Report in the vault scan",
+            write: "Write it as notes change",
+            startup: "Write it as notes change, and at startup"
+          }).setValue(indexMode()).onChange((v) => {
+            s.autoGenerateIndex = v === "write" || v === "startup";
+            s.generateIndexOnStartup = v === "startup";
+            s.reportIndexGaps = v === "report";
             save();
           })
         )
@@ -2476,33 +2512,13 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
           })
         )
       },
-      {
-        name: "Report index gaps",
-        desc: `Off (default). On: a vault scan warns where a folder has no index.md, and where one it has doesn't list a note anywhere in the file \u2014 under any heading, in any order. It only reports; nothing is written. For a vault whose listings are kept by hand, where generating over them writes a shape you didn't choose. With "Auto-generate index.md" on there will rarely be a gap left to find.`,
-        control: (row) => row.addToggle(
-          (tg) => tg.setValue(s.reportIndexGaps).onChange((v) => {
-            s.reportIndexGaps = v;
-            save();
-          })
-        )
-      },
       { name: "Rules", heading: true },
       {
-        name: "Warn on missing recommended fields",
-        desc: "Warn when `title`, `description`, or `generated` is missing (\xA74.1, \xA75.2).",
-        control: (row) => row.addToggle(
-          (tg) => tg.setValue(s.warnRecommendedFields).onChange((v) => {
-            s.warnRecommendedFields = v;
-            save();
-          })
-        )
-      },
-      {
-        name: "Warn on missing tags",
-        desc: "Warn when a note has no `tags`. Off by default \u2014 the spec doesn't ask for them.",
-        control: (row) => row.addToggle(
-          (tg) => tg.setValue(s.warnTagsField).onChange((v) => {
-            s.warnTagsField = v;
+        name: "Warn about missing fields",
+        desc: "Comma-separated: which recommended frontmatter fields are worth a warning when a note has none. `title`, `description`, and `generated` are what \xA74.1 and \xA75.2 recommend; `tags` the spec never asks for. Leave blank to warn about none.",
+        control: (row) => row.addText(
+          (t) => t.setPlaceholder(WARNABLE_FIELDS.join(", ")).setValue(s.warnMissingFields.join(", ")).onChange((v) => {
+            s.warnMissingFields = list(v);
             save();
           })
         )
@@ -2562,52 +2578,23 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
         )
       },
       {
-        name: "Validate type vocabulary",
-        desc: "Warn when `type` isn't one of the accepted values set under Portent schema.",
+        name: "Checks",
+        desc: "Comma-separated: which of Portent's optional checks to run \u2014 `type` (the vocabulary below), `lifecycle`, `belongs_to`, `related_to`. A note that doesn't carry the field a check looks at is never flagged. Leave blank to run none.",
         portentDependent: true,
-        control: (row) => row.addToggle(
-          (tg) => tg.setValue(s.portentCheckTypeVocab).onChange((v) => {
-            s.portentCheckTypeVocab = v;
-            save();
-          })
-        )
-      },
-      {
-        name: "Validate lifecycle",
-        desc: "Check lifecycle values on notes that carry them. A note with no lifecycle is never flagged.",
-        portentDependent: true,
-        control: (row) => row.addToggle(
-          (tg) => tg.setValue(s.portentCheckLifecycle).onChange((v) => {
-            s.portentCheckLifecycle = v;
-            save();
-          })
-        )
-      },
-      {
-        name: "Validate belongs_to",
-        desc: "Check `belongs_to` when present \u2014 a single wikilink to the primary parent.",
-        portentDependent: true,
-        control: (row) => row.addToggle(
-          (tg) => tg.setValue(s.portentCheckBelongsTo).onChange((v) => {
-            s.portentCheckBelongsTo = v;
-            save();
-          })
-        )
-      },
-      {
-        name: "Validate related_to",
-        desc: "Check `related_to` when present \u2014 a list of wikilinks.",
-        portentDependent: true,
-        control: (row) => row.addToggle(
-          (tg) => tg.setValue(s.portentCheckRelatedTo).onChange((v) => {
-            s.portentCheckRelatedTo = v;
+        control: (row) => row.addText(
+          (t) => t.setPlaceholder("type, lifecycle, belongs_to, related_to").setValue(portentChecks()).onChange((v) => {
+            const on = new Set(list(v));
+            s.portentCheckTypeVocab = on.has("type");
+            s.portentCheckLifecycle = on.has("lifecycle");
+            s.portentCheckBelongsTo = on.has("belongs_to");
+            s.portentCheckRelatedTo = on.has("related_to");
             save();
           })
         )
       },
       {
         name: "Portent schema",
-        desc: "Rename the frontmatter keys and redefine the vocabularies Portent checks, to match your own conventions or a future spec revision. Leave a field blank to restore its default.",
+        desc: "Redefine the vocabularies Portent checks and the frontmatter keys it reads, to match your own conventions or a future spec revision.",
         heading: true,
         portentDependent: true
       },
@@ -2619,17 +2606,6 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
           (t) => t.setValue(s.portentTypes.join(", ")).onChange((v) => {
             const l = list(v);
             s.portentTypes = l.length ? l : [...PORTENT_TYPES];
-            save();
-          })
-        )
-      },
-      {
-        name: "Lifecycle status field",
-        desc: "Frontmatter key holding the single lifecycle value (default `status`; e.g. rename to `state`).",
-        portentDependent: true,
-        control: (row) => row.addText(
-          (t) => t.setValue(s.portentStatusField).onChange((v) => {
-            s.portentStatusField = v.trim() || "status";
             save();
           })
         )
@@ -2647,45 +2623,12 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
         )
       },
       {
-        name: "Organized field",
-        desc: "Frontmatter key for the boolean `organized` lifecycle flag.",
+        name: "Field name overrides",
+        desc: "Comma-separated `concept=key` pairs remapping the frontmatter keys Portent reads onto the ones your vault uses \u2014 e.g. `status=state, belongs_to=parent`. The concepts are `status`, `organized`, `archived`, `belongs_to`, and `related_to`; anything you leave out keeps its own name.",
         portentDependent: true,
         control: (row) => row.addText(
-          (t) => t.setValue(s.portentOrganizedField).onChange((v) => {
-            s.portentOrganizedField = v.trim() || "organized";
-            save();
-          })
-        )
-      },
-      {
-        name: "Archived field",
-        desc: "Frontmatter key for the boolean `archived` lifecycle flag.",
-        portentDependent: true,
-        control: (row) => row.addText(
-          (t) => t.setValue(s.portentArchivedField).onChange((v) => {
-            s.portentArchivedField = v.trim() || "archived";
-            save();
-          })
-        )
-      },
-      {
-        name: "Belongs-to field",
-        desc: "Frontmatter key for the single-parent relationship (a wikilink).",
-        portentDependent: true,
-        control: (row) => row.addText(
-          (t) => t.setValue(s.portentBelongsToField).onChange((v) => {
-            s.portentBelongsToField = v.trim() || "belongs_to";
-            save();
-          })
-        )
-      },
-      {
-        name: "Related-to field",
-        desc: "Frontmatter key for the related-notes relationship (a list of wikilinks).",
-        portentDependent: true,
-        control: (row) => row.addText(
-          (t) => t.setValue(s.portentRelatedToField).onChange((v) => {
-            s.portentRelatedToField = v.trim() || "related_to";
+          (t) => t.setPlaceholder("status=state, belongs_to=parent").setValue(fieldOverrides()).onChange((v) => {
+            applyFieldOverrides(list(v));
             save();
           })
         )

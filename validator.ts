@@ -59,7 +59,15 @@ export interface OkfSettings extends PortentSettings {
    * plugin, or `human:<id>` if a person wants edits attributed to them.
    */
   defaultActor: string;
-  warnRecommendedFields: boolean;
+  /**
+   * Which absent-but-recommended frontmatter fields are worth a warning:
+   * any of `title`, `description`, `generated` (§4.1, §5.2) and `tags`. A set
+   * rather than a toggle per field, because these are one judgment — how much
+   * the vault wants said about what a note is missing — and answering it four
+   * times in four rows made the question look bigger than it is. Unknown names
+   * are ignored, so a vault can carry a token this version doesn't check yet.
+   */
+  warnMissingFields: string[];
   /**
    * Validate the v0.2 trust/lifecycle families when present: `verified`
    * shape + actors, `status` vocabulary, `stale_after` date form (§5.2–§5.5).
@@ -71,8 +79,11 @@ export interface OkfSettings extends PortentSettings {
    * `parameters`/`executor`/`attester` shape, and a present computation.
    */
   checkAttestedComputation: boolean;
-  warnTagsField: boolean;
-  warnBrokenLinks: boolean;
+  /**
+   * Validate the active note as it is edited. Gates the save path only — a note
+   * is always validated when it is opened, because the report pane's active-note
+   * section reads that verdict and would otherwise go stale behind the tab.
+   */
   liveCheckOnSave: boolean;
   scanOnStartup: boolean;
   fixOnSave: boolean;
@@ -123,14 +134,17 @@ export interface OkfSettings extends PortentSettings {
   excludeFolders: string[];
 }
 
+/** The fields "Warn about missing fields" can name, in the order shown. */
+export const WARNABLE_FIELDS = ["title", "description", "generated", "tags"] as const;
+
 export const DEFAULT_SETTINGS: OkfSettings = {
   defaultType: "Concept",
   defaultActor: "okf-enforcer/0.5",
-  warnRecommendedFields: true,
+  // `tags` left out: §4.1 recommends the other three, and the spec never asks
+  // for tags.
+  warnMissingFields: ["title", "description", "generated"],
   warnTrustFields: false,
   checkAttestedComputation: true,
-  warnTagsField: false,
-  warnBrokenLinks: false,
   liveCheckOnSave: true,
   scanOnStartup: true,
   fixOnSave: true,
@@ -1068,24 +1082,25 @@ function validateConcept(
     issues.push(issue);
   }
 
-  if (settings.warnRecommendedFields) {
-    if (!hasNonEmpty(data, "title")) {
-      issues.push({
-        severity: "warning",
-        rule: "§4.1",
-        message:
-          "Recommended `title` missing. Consumers may fall back to the filename.",
-        fix: "add-title",
-      });
-    }
-    if (!hasNonEmpty(data, "description")) {
-      issues.push({
-        severity: "warning",
-        rule: "§4.1",
-        message:
-          "Recommended `description` (one-line summary) missing. Used in index listings, search snippets, and previews.",
-      });
-    }
+  const warnFor = new Set(settings.warnMissingFields);
+  if (warnFor.has("title") && !hasNonEmpty(data, "title")) {
+    issues.push({
+      severity: "warning",
+      rule: "§4.1",
+      message:
+        "Recommended `title` missing. Consumers may fall back to the filename.",
+      fix: "add-title",
+    });
+  }
+  if (warnFor.has("description") && !hasNonEmpty(data, "description")) {
+    issues.push({
+      severity: "warning",
+      rule: "§4.1",
+      message:
+        "Recommended `description` (one-line summary) missing. Used in index listings, search snippets, and previews.",
+    });
+  }
+  if (warnFor.has("generated")) {
     // §5.2: `generated: { by, at }` records how the current content was
     // produced and when it last meaningfully changed, superseding v0.1's
     // `timestamp`. A legacy `timestamp` is accepted as a fallback (§13.1) and
@@ -1136,7 +1151,7 @@ function validateConcept(
     }
   }
 
-  if (settings.warnTagsField && !("tags" in data)) {
+  if (warnFor.has("tags") && !("tags" in data)) {
     issues.push({
       severity: "warning",
       rule: "§4.1",
