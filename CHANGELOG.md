@@ -4,7 +4,43 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.0] - 2026-08-05
+
+### Added
+- **Index gaps can be reported instead of written** ([#15](https://github.com/MartinForReal/okf-enforcer/issues/15)).
+  Setting **Incomplete index.md** to *Report in the vault scan* makes a vault
+  scan warn where a folder has no `index.md` and where an existing one doesn't
+  list a note
+  anywhere in the file — and write nothing. A note counts as listed under
+  whatever heading, in whatever order, and in whatever grouping its author
+  chose, so a listing kept by hand doesn't read as incomplete merely for not
+  looking generated. Both findings are warnings: §8 makes an index optional and
+  §11 forbids failing a bundle for a missing one.
+
+  This comes from the closing comment on
+  [#8](https://github.com/MartinForReal/okf-enforcer/issues/8) — a vault that
+  writes its own indexes for readability can't use generation, because
+  generation writes a shape the vault didn't choose, but still wants to be told
+  when a listing has fallen behind.
+
+- **The note you have open is listed in the report pane.** Opening a note now
+  puts its warnings and errors in a section of their own at the top of the
+  pane, listed open rather than behind a click. Opening a note has always
+  re-validated it, but the verdict went to the status bar alone — a count, with
+  the detail in a tooltip — while the pane went on showing whatever the last
+  vault scan had found, every row collapsed. Now the note in the editor is in
+  front of you whether or not it happened to be failing when that scan ran, and
+  whether or not a scan has ever run. A note with nothing wrong says so rather
+  than leaving the section blank, and a rescan or a **Fix all** re-reads the
+  section from the same pass, so it can't sit there contradicting the list
+  below it. An `index.md` carries its folder's §8 gap findings there too: a
+  scan files those against the index's path, but only reaches them by walking
+  the folder tree, so opening one would otherwise make it the single file the
+  plugin under-reports — clean in the editor, flagged in the list below. The
+  status bar counts them for the same reason. The active note is deliberately
+  kept apart from the scan results rather than merged into them: those count
+  the vault, and one note's verdict arriving between scans would leave the
+  summary chips describing a vault nobody scanned.
 
 ### Changed
 - **The settings tab asks 18 questions instead of 29**
@@ -46,53 +82,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   open-time check is now stated rather than implied. It is what the report
   pane's active-note section reads, so gating it would only make that section
   go stale behind the tab.
-
-### Removed
-- **Three settings that did nothing.** `warnBrokenLinks` had no read sites at
-  all — it was in the settings type and the defaults, and nowhere else.
-  `checkReservedFiles` and `promptVersionBumpOnMigrate` had been gone from the
-  source for some time but lived on in every vault's `data.json`, because
-  loading merged saved data over the defaults wholesale and wrote unknown keys
-  straight back out. Loading now keeps only fields that still exist, so a
-  dropped setting ages out of the vault instead of persisting forever.
-
-### Added
-- **Index gaps can be reported instead of written** ([#15](https://github.com/MartinForReal/okf-enforcer/issues/15)).
-  Setting **Incomplete index.md** to *Report in the vault scan* makes a vault
-  scan warn where a folder has no `index.md` and where an existing one doesn't
-  list a note
-  anywhere in the file — and write nothing. A note counts as listed under
-  whatever heading, in whatever order, and in whatever grouping its author
-  chose, so a listing kept by hand doesn't read as incomplete merely for not
-  looking generated. Both findings are warnings: §8 makes an index optional and
-  §11 forbids failing a bundle for a missing one.
-
-  This comes from the closing comment on
-  [#8](https://github.com/MartinForReal/okf-enforcer/issues/8) — a vault that
-  writes its own indexes for readability can't use generation, because
-  generation writes a shape the vault didn't choose, but still wants to be told
-  when a listing has fallen behind.
-
-- **The note you have open is listed in the report pane.** Opening a note now
-  puts its warnings and errors in a section of their own at the top of the
-  pane, listed open rather than behind a click. Opening a note has always
-  re-validated it, but the verdict went to the status bar alone — a count, with
-  the detail in a tooltip — while the pane went on showing whatever the last
-  vault scan had found, every row collapsed. Now the note in the editor is in
-  front of you whether or not it happened to be failing when that scan ran, and
-  whether or not a scan has ever run. A note with nothing wrong says so rather
-  than leaving the section blank, and a rescan or a **Fix all** re-reads the
-  section from the same pass, so it can't sit there contradicting the list
-  below it. An `index.md` carries its folder's §8 gap findings there too: a
-  scan files those against the index's path, but only reaches them by walking
-  the folder tree, so opening one would otherwise make it the single file the
-  plugin under-reports — clean in the editor, flagged in the list below. The
-  status bar counts them for the same reason. The active note is deliberately
-  kept apart from the scan results rather than merged into them: those count
-  the vault, and one note's verdict arriving between scans would leave the
-  summary chips describing a vault nobody scanned.
-
-### Changed
 - The report pane groups findings by the folder they sit in. A row used to be a
   bare file name, which said nothing about which of two same-named notes had
   failed and nothing at all about an index finding — those name `index.md`.
@@ -108,6 +97,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   It was always shown and silently did nothing otherwise, which a gap report —
   which names the `index.md` a folder hasn't got — would hit every time. It is
   also left off the active-note section, which describes a note already open.
+- The default **Actor for `generated.by`** is now `okf-enforcer/0.6`, tracking
+  the minor line as it has since 0.3.0. This is a default: if you have ever
+  saved settings, your existing actor is kept as written.
+
+### Removed
+- **Three settings that did nothing.** `warnBrokenLinks` had no read sites at
+  all — it was in the settings type and the defaults, and nowhere else.
+  `checkReservedFiles` and `promptVersionBumpOnMigrate` had been gone from the
+  source for some time but lived on in every vault's `data.json`, because
+  loading merged saved data over the defaults wholesale and wrote unknown keys
+  straight back out. Loading now keeps only fields that still exist, so a
+  dropped setting ages out of the vault instead of persisting forever.
 
 ### Internal
 - The listing a folder's contents call for, and the write of that listing, are
@@ -558,6 +559,7 @@ Initial release.
 - Batched, non-blocking scan/fix queue with an inline progress bar for large vaults.
 - Settings for automation toggles, batch size, warning rules, and excluded folders.
 
+[0.6.0]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.6.0
 [0.5.0]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.5.0
 [0.4.1]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.4.1
 [0.4.0]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.4.0

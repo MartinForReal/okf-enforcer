@@ -47,7 +47,7 @@ Clicking the status-bar item auto-fixes the active note and, if a required field
 Configure under **Settings → OKF Enforcer**:
 
 - **Default type for auto-fix** — value inserted into `type` when fixing notes that lack it.
-- **Default actor for `generated.by`** — the actor recorded when auto-fix adds a `generated` block (e.g. `okf-enforcer/0.5` or `human:<id>`). It goes into an inline YAML mapping, so it cannot contain a comma.
+- **Default actor for `generated.by`** — the actor recorded when auto-fix adds a `generated` block (e.g. `okf-enforcer/0.6` or `human:<id>`). It goes into an inline YAML mapping, so it cannot contain a comma.
 - **On save** — what an edit to the active note triggers: **Do nothing**, **Check the note** (validate it and update the status bar), or **Check and fix** (also insert the missing `type`, `title`, and `generated`). Whichever this is set to, a note is always validated when you *open* it — that verdict is what the status bar and the report pane's active-note section show.
 - **Automation** — **Scan vault on startup** and **Auto-migrate to latest OKF on fix**. The latter is on by default and lets ordinary auto-fix apply the v0.1 → v0.2 migrations; turn it off to keep them behind the explicit command, since a migration rewrites what you wrote.
 - **Incomplete index.md** — what to do about a folder whose §8 listing is missing or out of date:

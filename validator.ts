@@ -55,7 +55,7 @@ export interface OkfSettings extends PortentSettings {
   defaultType: string;
   /**
    * Actor written to `generated.by` when auto-fix creates a `generated` block
-   * (§5.2, §7). Follows the actor convention — e.g. `okf-enforcer/0.5` for the
+   * (§5.2, §7). Follows the actor convention — e.g. `okf-enforcer/0.6` for the
    * plugin, or `human:<id>` if a person wants edits attributed to them.
    */
   defaultActor: string;
@@ -139,7 +139,7 @@ export const WARNABLE_FIELDS = ["title", "description", "generated", "tags"] as 
 
 export const DEFAULT_SETTINGS: OkfSettings = {
   defaultType: "Concept",
-  defaultActor: "okf-enforcer/0.5",
+  defaultActor: "okf-enforcer/0.6",
   // `tags` left out: §4.1 recommends the other three, and the spec never asks
   // for tags.
   warnMissingFields: ["title", "description", "generated"],
@@ -1608,7 +1608,7 @@ export function applyFixes(
   if (fixes.size === 0) return { content, applied };
 
   const nowIso = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
-  const actor = settings.defaultActor || "okf-enforcer/0.5";
+  const actor = settings.defaultActor || "okf-enforcer/0.6";
   const title = basename(path);
   const split = splitFrontmatter(content);
 
