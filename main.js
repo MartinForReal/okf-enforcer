@@ -1464,7 +1464,7 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
   }
   onload() {
     this.settings = { ...DEFAULT_SETTINGS };
-    void this.loadSettings();
+    const settingsLoaded = this.loadSettings();
     this.registerView(OKF_VIEW_TYPE, (leaf) => new OkfReportView(leaf, this));
     this.statusEl = this.addStatusBarItem();
     this.statusEl.setText("OKF: \u2014");
@@ -1604,7 +1604,7 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
         this.markIndexDirty(parentPath(file.path));
       })
     );
-    this.addSettingTab(new OkfSettingTab(this.app, this));
+    void settingsLoaded.catch(() => void 0).then(() => this.addSettingTab(new OkfSettingTab(this.app, this)));
     this.app.workspace.onLayoutReady(() => {
       this.layoutReady = true;
       window.setTimeout(() => {
@@ -1632,7 +1632,7 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
   }
   async loadSettings() {
     const saved = await this.loadData();
-    this.settings = { ...DEFAULT_SETTINGS };
+    Object.assign(this.settings, DEFAULT_SETTINGS);
     if (!saved) return;
     for (const key of Object.keys(DEFAULT_SETTINGS)) {
       if (saved[key] !== void 0) {
