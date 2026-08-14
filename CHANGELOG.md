@@ -4,6 +4,25 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-08-14
+
+### Fixed
+- **Settings changes are kept again** ([#21](https://github.com/MartinForReal/okf-enforcer/issues/21)).
+  On Obsidian 1.13 the settings tab showed the defaults whatever `data.json`
+  held, and an edit made there was dropped instead of saved. 1.13 asks a tab
+  for its rows the moment the tab is registered, so it can index them for
+  settings search, and the plugin registered the tab without waiting for
+  `data.json` to be read — so the rows were built against the defaults, and
+  every one of them went on reading and writing a settings object the plugin
+  had already replaced. The tab is now registered once the load has finished,
+  and the load updates the settings object in place rather than swapping in a
+  new one, so a row that took a reference to it keeps a live one.
+
+  Only the settings UI was affected: validation, exclusions and index
+  generation read the settings afresh each time and always followed
+  `data.json`. Nothing needs to be done to a vault that hit this — reopen
+  Settings and the stored values are there.
+
 ## [0.6.0] - 2026-08-05
 
 ### Added
@@ -559,6 +578,7 @@ Initial release.
 - Batched, non-blocking scan/fix queue with an inline progress bar for large vaults.
 - Settings for automation toggles, batch size, warning rules, and excluded folders.
 
+[0.6.1]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.6.1
 [0.6.0]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.6.0
 [0.5.0]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.5.0
 [0.4.1]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.4.1

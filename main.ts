@@ -70,7 +70,7 @@ export default class OkfPlugin extends Plugin {
     // the background. Event/command handlers read this.settings lazily, so
     // they pick up the loaded values once the async load resolves.
     this.settings = { ...DEFAULT_SETTINGS };
-    void this.loadSettings();
+    const settingsLoaded = this.loadSettings();
 
     this.registerView(OKF_VIEW_TYPE, (leaf) => new OkfReportView(leaf, this));
 
@@ -225,7 +225,16 @@ export default class OkfPlugin extends Plugin {
       })
     );
 
-    this.addSettingTab(new OkfSettingTab(this.app, this));
+    // Register the tab only once the persisted values are in hand. Obsidian
+    // 1.13+ asks a tab for its setting definitions as soon as it is added, so
+    // it can index them for settings search; definitions built while
+    // this.settings still held the defaults would show the defaults for the
+    // rest of the session and write them back on the next edit. catch() so a
+    // failed read still leaves the user a settings tab, backed by defaults.
+    void settingsLoaded
+      .catch(() => undefined)
+      .then(() => this.addSettingTab(new OkfSettingTab(this.app, this)));
+
     this.app.workspace.onLayoutReady(() => {
       this.layoutReady = true;
       // The panel is hidden by default simply because we never auto-open it;
@@ -259,7 +268,10 @@ export default class OkfPlugin extends Plugin {
 
   async loadSettings() {
     const saved = (await this.loadData()) as Record<string, unknown> | null;
-    this.settings = { ...DEFAULT_SETTINGS };
+    // Reset in place rather than assigning a fresh object: the settings tab's
+    // row builders close over this.settings, so replacing it would leave the UI
+    // reading and writing a copy nothing else ever sees.
+    Object.assign(this.settings, DEFAULT_SETTINGS);
     if (!saved) return;
     // Copy only keys we still have, so a field dropped in an earlier version
     // stops being written back out on every save and eventually ages out of
