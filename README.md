@@ -3,6 +3,7 @@
 ![Build](https://github.com/MartinForReal/okf-enforcer/actions/workflows/build.yml/badge.svg)
 [![Release](https://img.shields.io/github/v/release/MartinForReal/okf-enforcer?display_name=tag&sort=semver)](https://github.com/MartinForReal/okf-enforcer/releases/latest)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+[![OKF BundleDex](https://bundledex.net/static-badge.svg)](https://bundledex.net)
 
 An [Obsidian](https://obsidian.md) plugin that validates and enforces the **Open Knowledge Format (OKF) v0.2** across your vault — keeping every note self-describing, agent-readable, and portable.
 
