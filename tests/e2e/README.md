@@ -20,6 +20,12 @@ Node tests use JSON-flow frontmatter only and do not establish runtime acceptanc
    otherwise closes GUI children when the launch command exits. For example,
    in PowerShell, use `$p = Start-Process -WindowStyle Normal -PassThru` with the
    isolated-profile arguments above, followed by `Wait-Process -Id $p.Id`.
+   Keep the test window in the foreground throughout the suite. Hidden or
+   fully occluded Electron windows throttle timers: an observed zero-delay
+   timer took nearly 60 seconds, invalidating bounded race-check waits. The
+   harness records visibility transitions and fails if the window is hidden;
+   restore it with the native driver (or manually), reset and rerun. Do not
+   enlarge race-check timeouts or disable app/browser protections to force GREEN.
 5. `node tests/e2e/cdp.mjs <fixtureRoot> receipt` reads the actual result. The
    Node 22+ helper verifies the target vault before any non-inventory operation.
    `run` invokes the same companion programmatically; `screenshot` captures the

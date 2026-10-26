@@ -46,9 +46,16 @@ export default class E2EConsumer extends Plugin {
       fixtureRoot: config.fixtureRoot, vault: config.vault, bundleSha256: config.bundleSha256,
       gitHead: config.gitHead, tests: results, status: "running" };
     this.lastReceipt = receipt;
+    const visibility = [{ state: document.visibilityState, at: new Date().toISOString() }];
+    const visibilityChanged = () => visibility.push({ state: document.visibilityState, at: new Date().toISOString() });
+    document.addEventListener("visibilitychange", visibilityChanged);
+    receipt.visibility = visibility;
     const test = async (name: string, action: () => Promise<void>, injection?: string) => {
       const start = Date.now();
-      try { await action(); results.push({ name, status: "passed", durationMs: Date.now() - start, ...(injection ? { injection } : {}) }); }
+      try {
+        assert(!document.hidden, "Bring the disposable Obsidian window to the foreground and reset the fixture before rerunning; hidden-window timers are throttled.");
+        await action(); results.push({ name, status: "passed", durationMs: Date.now() - start, ...(injection ? { injection } : {}) });
+      }
       catch (error) { results.push({ name, status: "failed", error: String(error), durationMs: Date.now() - start, ...(injection ? { injection } : {}) }); }
     };
     const hashes = () => {
@@ -276,6 +283,9 @@ export default class E2EConsumer extends Plugin {
 
     function finish() {
       consumer.running = false;
+      document.removeEventListener("visibilitychange", visibilityChanged);
+      receipt.foregroundStable = visibility.every((event) => event.state === "visible");
+      if (!receipt.foregroundStable) results.push({ name: "foreground test environment", status: "failed", error: "Window became hidden; reset and rerun in foreground" });
       // Reloading the actual companion closes its running modal. Display the
       // result in a fresh modal rather than updating a detached content node.
       modal.close(); modal = new Modal(consumer.app); modal.open();

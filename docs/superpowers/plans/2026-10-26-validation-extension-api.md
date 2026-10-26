@@ -22,8 +22,11 @@ The fresh whole-branch review's receiver, sparse-output and queued-refresh
 findings were fixed with RED/GREEN regressions, along with safe fixture reuse.
 Runtime testing refined only the harness: wait for eventual UI state, track
 the tested invocation's signal, isolate the save control from background work,
-and reopen the result modal after the companion's real unload. The provider
-bundle is unchanged. PR #26 stays open as a draft for the user's review; no
+and reopen the result modal after the companion's real unload. A backgrounded
+retry exposed Electron timer throttling (one zero-delay wait took nearly 60 s);
+the harness now guards and records foreground visibility. A foreground-stable
+repeat passed 18/18 without changing assertions, timeouts or production code.
+The provider bundle is unchanged. PR #26 stays open as a draft for the user's review; no
 merge or release. Android/iOS and actual Obsidian 1.7.2 runtime are untested.
 
 ## Global Constraints

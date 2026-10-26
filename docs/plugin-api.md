@@ -174,6 +174,8 @@ run independently; a throw, rejection, malformed result or deadline produces a
 source-labelled warning and an incomplete assessment while core and other
 providers continue. An invalid diagnostic invalidates that invocation’s whole
 result rather than accepting a misleading partial success.
+Like other event-loop timers, the deadline can be delayed when the host is
+backgrounded; it is not a hard real-time guarantee.
 
 Pass `context.signal` to cancellable I/O and check it before expensive work.
 Unregistering, host unload, tab changes and scan invalidation abort pending
@@ -208,6 +210,8 @@ deliberately separate from extending validation.
   trust/security action was automated. Real command invocation used the
   fixture-scoped loopback driver; native CUA inspected the actual report.
   Pointer automation was unavailable, so native-input coverage is not claimed.
+  Tests require a foreground window; hidden Electron timer throttling was
+  separately reproduced and is guarded/recorded by the companion harness.
 - The desktop receipt covers real YAML/frozen context, active/full source
   labels, status click, stale tab and scan cancellation, provider failures and
   the 2000 ms deadline, host/companion reload, delayed/failed settings,
