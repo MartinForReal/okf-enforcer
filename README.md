@@ -6,7 +6,7 @@
 
 An [Obsidian](https://obsidian.md) plugin that validates and enforces the **Open Knowledge Format (OKF) v0.2** across your vault — keeping every note self-describing, agent-readable, and portable.
 
-OKF is an open, minimal convention for representing knowledge as a directory of Markdown files with YAML frontmatter. Its one hard rule: every non-reserved note carries a parseable frontmatter block with a non-empty `type`. v0.2 adds first-class **provenance, trust, lifecycle, and attestation** on top of that, while staying backward-compatible with v0.1 bundles. This plugin makes following the format effortless. See the [OKF specification](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md).
+OKF is an open, minimal convention for representing knowledge as a directory of Markdown files with YAML frontmatter. Its one hard rule: every non-reserved note carries a parseable frontmatter block with a non-empty `type`. v0.2 adds first-class **provenance, trust, lifecycle, and attestation** on top of that, while staying backward-compatible with v0.1 bundles. This plugin makes following the format effortless. See the [OKF specification](https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md).
 
 ## Features
 
