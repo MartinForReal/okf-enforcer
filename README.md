@@ -14,7 +14,8 @@ OKF is an open, minimal convention for representing knowledge as a directory of 
 - **Trust & provenance (v0.2).** Opt-in checks for the §5 families: `generated`/`verified` and the actor convention, `status` (`draft|stable|deprecated`), `stale_after` — both that it's an absolute date and whether it has passed, so a note that's due for review says so — and `sources` with its credibility signals (`author`/`usage_count`/`last_modified`). The note's derived trust tier (unverified / machine-confirmed / human-reviewed) is shown in the status-bar tooltip.
 - **Attested Computation (v0.2).** Validates `type: Attested Computation` concepts (§10) — a required `runtime`, a present computation (inline `# Computation` fence or a `computation` path), and `parameters`/`executor`/`attester` shape.
 - **v0.1 → v0.2 migration.** A command rewrites a legacy `timestamp` into `generated: { by, at }` and lifts a body `# Citations` list into `sources`, then offers to declare `okf_version: "0.2"` in the root index.
-- **Vault-wide report.** A compact, collapsible side panel lists every non-conformant note **grouped by the folder it sits in**, errors first at both levels, with a one-line summary of conformant / error / warning counts. The folder is named once in its group header, so the rows under it read as file names rather than as the same path prefix repeated down the pane. **The note you have open gets its own section at the top, listed open** — so opening a note shows what is wrong with it without hunting the list for its row, and without a vault scan having run at all. Hidden by default; opens only on demand.
+- **Vault-wide report.** A compact, collapsible side panel lists findings **grouped by folder**, errors first, with separate core OKF and extension results. Read failures, unprocessed notes and reduced core checks are shown as incomplete/unknown rather than a clean vault. Folder findings have their own count. **The note you have open gets its own section at the top, listed open**, even before a vault scan. Hidden by default; opens only on demand.
+- **Validation extensions (API v1).** Companion plugins register extra note-level checks, such as an owner requirement or type vocabulary. Their source-labelled findings appear in existing active-note, save, vault and post-fix reports without changing core OKF conformance or gaining auto-fix authority. See the [plugin developer guide](docs/plugin-api.md) and [owner-policy example](examples/owner-validator/main.ts). This branch adds the API; it is not a release announcement.
 - **Status-bar indicator.** A single status-bar item shows the active note's state (`✓` / `⚠` / `✖`) with details in its tooltip — including the note's derived trust tier, when trust checks are on. Click it to auto-fix the current note.
 - **Auto-fix.** Inserts missing frontmatter (`type`, `title`, `generated`) non-destructively — it never overwrites values you've set.
 - **Prompt for required fields.** When a note is missing a meaningful `type`, a dialog lets you set `type`, `title`, and `description` directly.
@@ -78,10 +79,20 @@ Download `main.js`, `manifest.json`, and `styles.css` from the [latest release](
 
 ```bash
 npm install
+npm test        # Node registry/pipeline/lifecycle/report tests
+npx tsc --noEmit
 npm run build   # bundles main.ts -> main.js via esbuild
 ```
 
 Pushing a version tag (e.g. `0.1.0`) triggers the GitHub Actions workflow that builds and attaches `main.js`, `manifest.json`, and `styles.css` to a new release automatically.
+
+### Plugin developers
+
+Use the [validation-extension API guide](docs/plugin-api.md) to contribute checks
+from a separate Obsidian plugin. It documents registration, load order, cleanup,
+async cancellation, failure isolation and the private-discovery caveat. The
+copyable contract does not require a published SDK or importing the host bundle.
+For actual-app testing, use the [disposable desktop fixture](tests/e2e/README.md).
 
 ## Changelog
 

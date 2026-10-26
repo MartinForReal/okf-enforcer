@@ -22,7 +22,7 @@ __export(main_exports, {
   default: () => OkfPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian3 = require("obsidian");
+var import_obsidian4 = require("obsidian");
 
 // validator.ts
 var import_obsidian = require("obsidian");
@@ -628,13 +628,13 @@ function appendToSection(lines, section, items) {
   }
   lines.splice(at, 0, ...items);
 }
-function validateContent(path, content, isRoot, settings) {
+function validateContent(path, content, isRoot, settings, today = /* @__PURE__ */ new Date()) {
   const reserved = isReserved(path);
   if (reserved === "index") return validateIndex(content, isRoot);
   if (reserved === "log") return validateLog(content);
-  return validateConcept(path, content, settings);
+  return validateConcept(path, content, settings, today);
 }
-function validateConcept(path, content, settings) {
+function validateConcept(path, content, settings, today) {
   const issues = [];
   const { hasFm, raw } = splitFrontmatter(content);
   if (!hasFm) {
@@ -755,7 +755,7 @@ function validateConcept(path, content, settings) {
     });
   }
   if (settings.warnTrustFields) {
-    issues.push(...validateTrustFamilies(data));
+    issues.push(...validateTrustFamilies(data, today));
   }
   if (settings.checkAttestedComputation && typeof type === "string" && type.trim() === "Attested Computation") {
     issues.push(...validateAttestedComputation(data, content));
@@ -765,7 +765,7 @@ function validateConcept(path, content, settings) {
   }
   return issues;
 }
-function validateTrustFamilies(data) {
+function validateTrustFamilies(data, today) {
   const issues = [];
   if ("verified" in data && data["verified"] !== null) {
     const events = normalizeVerified(data);
@@ -820,7 +820,7 @@ function validateTrustFamilies(data) {
         rule: "\xA75.5",
         message: "`stale_after` should be an absolute date (`YYYY-MM-DD`)."
       });
-    } else if (isStale(data)) {
+    } else if (isStale(data, today)) {
       issues.push({
         severity: "warning",
         rule: "\xA75.5",
@@ -1184,6 +1184,8 @@ var OkfReportView = class extends import_obsidian2.ItemView {
     super(leaf);
     this.results = [];
     this.scanned = 0;
+    this.summary = null;
+    this.invalidated = false;
     /** Paths whose file block is expanded. Default collapsed → empty set. */
     this.expanded = /* @__PURE__ */ new Set();
     /** Folders whose group is collapsed. Default expanded → empty set: a group
@@ -1193,6 +1195,8 @@ var OkfReportView = class extends import_obsidian2.ItemView {
      *  summary keeps counting the vault while this follows the tab. */
     this.activePath = null;
     this.activeIssues = [];
+    this.activeConformance = "unknown";
+    this.activeExtensionsComplete = false;
     // Persistent skeleton elements (built once, survive list re-renders).
     this.progressWrap = null;
     this.progressBar = null;
@@ -1255,9 +1259,11 @@ var OkfReportView = class extends import_obsidian2.ItemView {
     var _a;
     (_a = this.progressWrap) == null ? void 0 : _a.addClass("is-hidden");
   }
-  setResults(results, scanned) {
+  setResults(results, scanned, summary) {
     this.results = results;
     this.scanned = scanned;
+    this.summary = summary != null ? summary : null;
+    this.invalidated = false;
     const paths = new Set(results.map((r) => r.path));
     for (const p of [...this.expanded]) if (!paths.has(p)) this.expanded.delete(p);
     const dirs = new Set(results.map((r) => dirOf(r.path)));
@@ -1266,9 +1272,19 @@ var OkfReportView = class extends import_obsidian2.ItemView {
   }
   /** Point the pane at the note in the editor. Pass null when what is open is
    *  not a markdown note. */
-  setActive(path, issues) {
+  setActive(path, issues, conformance = "unknown", extensionsComplete = false) {
     this.activePath = path;
     this.activeIssues = issues;
+    this.activeConformance = conformance;
+    this.activeExtensionsComplete = extensionsComplete;
+    this.renderBody();
+  }
+  /** Registry/settings changed: do not present old findings as current. */
+  invalidate() {
+    this.results = [];
+    this.scanned = 0;
+    this.summary = null;
+    this.invalidated = true;
     this.renderBody();
   }
   /** Re-render only the summary + file list (leaves toolbar/progress intact). */
@@ -1283,13 +1299,18 @@ var OkfReportView = class extends import_obsidian2.ItemView {
     this.renderList(b);
   }
   renderSummary(b) {
-    const errorFiles = this.results.filter(hasError).length;
-    const warnFiles = this.results.length - errorFiles;
-    const passFiles = this.scanned - this.results.length;
+    const s = this.summary;
+    if (!s) return;
     const summary = b.createDiv({ cls: "okf-summary" });
-    summary.createSpan({ cls: "okf-chip okf-pass", text: `\u2713 ${passFiles}` });
-    summary.createSpan({ cls: "okf-chip okf-error", text: `\u2716 ${errorFiles}` });
-    summary.createSpan({ cls: "okf-chip okf-warn", text: `\u26A0 ${warnFiles}` });
+    summary.createSpan({ cls: `okf-chip ${s.conformance === "conformant" ? "okf-pass" : "okf-warn"}`, text: `Core OKF: ${s.conformance}` });
+    summary.createSpan({ cls: "okf-chip", text: `${s.counts.files.validated}/${s.counts.files.candidates} notes validated` });
+    summary.createSpan({ cls: `okf-chip ${s.coreErrorFiles ? "okf-error" : "okf-pass"}`, text: `${s.coreErrorFiles} core errors (files)` });
+    summary.createSpan({ cls: `okf-chip ${s.extensionErrorFiles ? "okf-warn" : "okf-pass"}`, text: `${s.extensionErrorFiles} extension errors (files)` });
+    if (s.folderFindings) summary.createSpan({ cls: "okf-chip okf-warn", text: `${s.folderFindings} folder findings` });
+    if (s.status !== "complete" || s.checkCoverage !== "full") {
+      b.createDiv({ cls: "okf-coverage", text: `Core checks incomplete (${s.checkCoverage}; ${s.status}): ${s.counts.files.unreadable} unreadable, ${s.counts.files.unprocessed} unprocessed notes; ${s.counts.folders.unreadable} unreadable, ${s.counts.folders.unprocessed} unprocessed folders.` });
+    }
+    if (!s.extensions.complete) b.createDiv({ cls: "okf-coverage", text: `Extension checks incomplete: ${s.extensions.failed} failed, ${s.extensions.cancelled} cancelled. Core OKF conformance is separate.` });
   }
   /**
    * The note in the editor, listed open in a section of its own. Hunting the
@@ -1302,22 +1323,24 @@ var OkfReportView = class extends import_obsidian2.ItemView {
     if (!path) return;
     const sec = b.createDiv({ cls: "okf-active" });
     sec.createDiv({ cls: "okf-active-title", text: "Active note" });
+    sec.createDiv({ cls: "okf-active-verdict", text: `Core OKF: ${this.activeConformance} \xB7 Extensions: ${this.activeExtensionsComplete ? "complete" : "incomplete"}` });
     if (!this.activeIssues.length) {
       const line = sec.createDiv({ cls: "okf-active-clean" });
       line.setAttribute("aria-label", `${path} \u2014 no issues`);
-      line.createSpan({ cls: "okf-ok", text: "\u2713" });
+      line.createSpan({ cls: "okf-ok", text: this.activeConformance === "conformant" && this.activeExtensionsComplete ? "\u2713" : "?" });
       this.renderLabel(line, path, true);
       return;
     }
     this.renderFileBlock(sec, { path, issues: this.activeIssues }, "active");
   }
   renderList(b) {
-    if (this.scanned === 0) {
-      b.createDiv({ cls: "okf-empty", text: "No scan yet \u2014 click Rescan." });
+    if (!this.summary) {
+      b.createDiv({ cls: "okf-empty", text: this.invalidated ? "Checks changed \u2014 refreshing; previous findings invalidated." : "No scan yet \u2014 click Rescan." });
       return;
     }
     if (this.results.length === 0) {
-      b.createDiv({ cls: "okf-empty", text: "\u2713 All notes conform." });
+      const complete = this.summary.conformance === "conformant" && this.summary.extensions.complete;
+      b.createDiv({ cls: "okf-empty", text: !this.scanned ? "No notes in the configured scope." : complete ? "\u2713 All checked notes conform; no extension findings." : "Checks incomplete \u2014 no complete conformance verdict." });
       return;
     }
     const groups = /* @__PURE__ */ new Map();
@@ -1369,6 +1392,7 @@ var OkfReportView = class extends import_obsidian2.ItemView {
    * whatever happens to be rendered above.
    */
   renderFileBlock(host, r, mode) {
+    var _a, _b;
     const inList = mode === "list";
     const isErr = hasError(r);
     const isOpen = inList ? this.expanded.has(r.path) : true;
@@ -1397,9 +1421,11 @@ var OkfReportView = class extends import_obsidian2.ItemView {
         text: issue.severity === "error" ? "\u2716" : "\u26A0"
       });
       const txt = row.createSpan({ cls: "okf-issue-text" });
+      const source = txt.createSpan({ cls: "okf-source", text: (_a = issue.providerName) != null ? _a : issue.rule.startsWith("portent/") ? "Portent" : "OKF" });
+      source.setAttribute("aria-label", `Source: ${(_b = issue.providerId) != null ? _b : issue.rule.startsWith("portent/") ? "portent" : "okf"}`);
       txt.createSpan({ text: issue.message + " " });
       txt.createSpan({ cls: "okf-rule", text: issue.rule });
-      if (issue.fix) txt.createSpan({ cls: "okf-fixable", text: " \xB7 fixable" });
+      if (issue.fix && !issue.providerId) txt.createSpan({ cls: "okf-fixable", text: " \xB7 fixable" });
     }
     if (!inList) return;
     const target = this.app.vault.getAbstractFileByPath(r.path);
@@ -1428,23 +1454,548 @@ var OkfReportView = class extends import_obsidian2.ItemView {
   }
 };
 
+// extensions.ts
+var import_obsidian3 = require("obsidian");
+
+// validation.ts
+function apiError(code, message) {
+  return Object.assign(new Error(message), { name: "OkfApiError", code });
+}
+function snapshotSettings(settings) {
+  return JSON.parse(JSON.stringify(settings));
+}
+function reportMetadata(settings, context) {
+  const disabledErrorChecks = settings.checkAttestedComputation ? [] : ["checkAttestedComputation"];
+  return {
+    apiVersion: 1,
+    pluginVersion: context.pluginVersion,
+    okfVersion: OKF_VERSION,
+    evaluatedAt: context.now.toISOString(),
+    checkCoverage: disabledErrorChecks.length ? "reduced" : "full",
+    disabledErrorChecks,
+    enabledChecks: {
+      structure: true,
+      checkAttestedComputation: settings.checkAttestedComputation,
+      warnMissingFields: [...settings.warnMissingFields],
+      warnTrustFields: settings.warnTrustFields,
+      reportIndexGaps: settings.reportIndexGaps,
+      portent: {
+        enabled: settings.enablePortent,
+        types: settings.portentTypes.length ? [...settings.portentTypes] : [...PORTENT_TYPES],
+        statuses: settings.portentStatuses.length ? [...settings.portentStatuses] : [...PORTENT_STATUSES],
+        fields: {
+          status: settings.portentStatusField || "status",
+          organized: settings.portentOrganizedField || "organized",
+          archived: settings.portentArchivedField || "archived",
+          belongs_to: settings.portentBelongsToField || "belongs_to",
+          related_to: settings.portentRelatedToField || "related_to"
+        },
+        checks: [
+          settings.portentCheckTypeVocab && "type",
+          settings.portentCheckLifecycle && "lifecycle",
+          settings.portentCheckBelongsTo && "belongs_to",
+          settings.portentCheckRelatedTo && "related_to"
+        ].filter((check) => !!check)
+      }
+    }
+  };
+}
+function publicDiagnostics(issues) {
+  return issues.map(({ rule, severity, message, providerId, providerName }) => ({
+    source: providerId != null ? providerId : rule.startsWith("portent/") ? "portent" : "okf",
+    ...providerName ? { sourceName: providerName } : {},
+    rule,
+    severity,
+    message
+  }));
+}
+function conformanceFor(issues, coverage, complete = true) {
+  if (!complete || coverage !== "full") return "unknown";
+  return issues.some((issue) => issue.severity === "error" && !issue.providerId && !issue.rule.startsWith("portent/")) ? "non-conformant" : "conformant";
+}
+function validateProvidedContent(input, settings, context) {
+  if (!input || typeof input !== "object" || Array.isArray(input) || typeof input.path !== "string" || typeof input.content !== "string" || !input.path.endsWith(".md") || /^[A-Za-z]:/.test(input.path) || /[\\\x00-\x1f]/.test(input.path) || input.path.split("/").some((part) => !part || part === "." || part === "..")) {
+    throw apiError("invalid-request", "Expected Markdown content and a vault-relative .md path without absolute paths, backslashes or dot segments.");
+  }
+  const metadata = reportMetadata(settings, context);
+  const issues = validateContent(input.path, input.content, !input.path.includes("/"), settings, context.now);
+  return {
+    ...metadata,
+    scope: { kind: "content", path: input.path },
+    conformance: conformanceFor(issues, metadata.checkCoverage),
+    diagnostics: publicDiagnostics(issues)
+  };
+}
+
+// extensions.ts
+function messageOf(error) {
+  try {
+    return error instanceof Error ? error.message : String(error);
+  } catch (e) {
+    return "Unknown validator failure";
+  }
+}
+function immutableData(value, seen = /* @__PURE__ */ new WeakMap()) {
+  if (!value || typeof value !== "object") return value;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? "Invalid Date" : value.toISOString();
+  if (seen.has(value)) return seen.get(value);
+  const copy = Array.isArray(value) ? [] : {};
+  seen.set(value, copy);
+  for (const key of Object.keys(value)) {
+    Object.defineProperty(copy, key, { value: immutableData(value[key], seen), enumerable: true });
+  }
+  return Object.freeze(copy);
+}
+function contextTemplate(path, content, core, now) {
+  var _a;
+  const parts = splitFrontmatter(content);
+  let frontmatter = null;
+  let frontmatterState = parts.hasFm ? "invalid" : "missing";
+  if (parts.hasFm) {
+    try {
+      const parsed = (0, import_obsidian3.parseYaml)(parts.raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        frontmatter = parsed;
+        frontmatterState = "valid";
+      }
+    } catch (e) {
+    }
+  }
+  return {
+    path,
+    content,
+    kind: (_a = isReserved(path)) != null ? _a : "concept",
+    body: parts.body,
+    frontmatter,
+    frontmatterState,
+    evaluatedAt: now.toISOString(),
+    coreDiagnostics: core.filter((issue) => !issue.providerId && !issue.rule.startsWith("portent/")).map(({ rule, severity, message }) => ({ rule, severity, message }))
+  };
+}
+var ExtensionRegistry = class {
+  constructor(onChange = () => {
+  }, timeoutMs = 2e3) {
+    this.onChange = onChange;
+    this.timeoutMs = timeoutMs;
+    this.entries = /* @__PURE__ */ new Map();
+    this.version = 0;
+    this.disposed = false;
+  }
+  get revision() {
+    return this.version;
+  }
+  register(provider) {
+    if (this.disposed) throw apiError("unavailable", "The validation host has unloaded; reacquire its API.");
+    if (!provider || typeof provider !== "object" || typeof provider.id !== "string" || !/^[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*)*$/.test(provider.id) || /^(okf|okf-enforcer)(\/|$)/.test(provider.id) || typeof provider.name !== "string" || !provider.name.trim() || typeof provider.validate !== "function") {
+      throw apiError("invalid-provider", "A validator needs a unique non-reserved lowercase ID, display name, and validate callback.");
+    }
+    if (this.entries.has(provider.id)) throw apiError("duplicate-provider", `Validator ID is already registered: ${provider.id}`);
+    const entry = { id: provider.id, name: provider.name.trim(), validate: provider.validate.bind(provider), active: true, pending: /* @__PURE__ */ new Set() };
+    this.entries.set(entry.id, entry);
+    this.changed();
+    return () => {
+      if (!entry.active) return;
+      entry.active = false;
+      if (this.entries.get(entry.id) === entry) this.entries.delete(entry.id);
+      [...entry.pending].forEach((cancel) => cancel());
+      this.changed();
+    };
+  }
+  snapshot() {
+    return { revision: this.version, entries: [...this.entries.values()] };
+  }
+  dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
+    for (const entry of this.entries.values()) {
+      entry.active = false;
+      [...entry.pending].forEach((cancel) => cancel());
+    }
+    this.entries.clear();
+    this.version++;
+  }
+  async validate(path, content, core, now, snapshot = this.snapshot(), signal) {
+    if (!snapshot.entries.length) return { revision: snapshot.revision, issues: [], assessments: [], complete: true };
+    const template = contextTemplate(path, content, core, now);
+    const results = await Promise.all(snapshot.entries.map((entry) => this.invoke(entry, template, signal)));
+    return {
+      revision: snapshot.revision,
+      issues: results.flatMap((result) => result.issues),
+      assessments: results.map((result) => result.assessment),
+      complete: results.every((result) => result.assessment.status === "passed" || result.assessment.status === "findings")
+    };
+  }
+  changed() {
+    this.version++;
+    this.onChange();
+  }
+  invoke(entry, template, signal) {
+    const cancelled = () => ({ issues: [], assessment: { id: entry.id, name: entry.name, status: "cancelled", reason: "cancelled" } });
+    const failed = (reason, message) => ({
+      assessment: { id: entry.id, name: entry.name, status: "failed", reason },
+      issues: [{
+        severity: "warning",
+        rule: "validator/failure",
+        message: `Validator ${entry.name} failed: ${message}`,
+        providerId: entry.id,
+        providerName: entry.name,
+        providerFailure: true
+      }]
+    });
+    if (!entry.active || this.disposed || (signal == null ? void 0 : signal.aborted)) return Promise.resolve(cancelled());
+    return new Promise((resolve) => {
+      const controller = new AbortController();
+      let done = false;
+      let timer;
+      const finish = (result) => {
+        if (done) return;
+        done = true;
+        if (timer !== void 0) clearTimeout(timer);
+        signal == null ? void 0 : signal.removeEventListener("abort", cancel);
+        entry.pending.delete(cancel);
+        resolve(result);
+      };
+      const cancel = () => {
+        finish(cancelled());
+        controller.abort();
+      };
+      entry.pending.add(cancel);
+      if (signal == null ? void 0 : signal.aborted) {
+        cancel();
+        return;
+      }
+      signal == null ? void 0 : signal.addEventListener("abort", cancel, { once: true });
+      timer = setTimeout(() => {
+        finish(failed("timeout", `asynchronous deadline exceeded (${this.timeoutMs} ms)`));
+        controller.abort();
+      }, this.timeoutMs);
+      const context = Object.freeze({
+        ...template,
+        frontmatter: immutableData(template.frontmatter),
+        coreDiagnostics: immutableData(template.coreDiagnostics),
+        signal: controller.signal
+      });
+      Promise.resolve().then(() => {
+        if (done || !entry.active) return [];
+        return entry.validate(context);
+      }).then((diagnostics) => {
+        if (done) return;
+        if (!entry.active || this.disposed) {
+          cancel();
+          return;
+        }
+        try {
+          if (!Array.isArray(diagnostics)) throw new Error("expected an array of diagnostics");
+          const issues = Array.from(diagnostics, (diagnostic) => {
+            if (!diagnostic || typeof diagnostic.rule !== "string" || !diagnostic.rule.trim() || typeof diagnostic.message !== "string" || !diagnostic.message.trim() || diagnostic.severity !== "error" && diagnostic.severity !== "warning") {
+              throw new Error("each diagnostic needs rule, message and error/warning severity");
+            }
+            return {
+              rule: diagnostic.rule,
+              message: diagnostic.message,
+              severity: diagnostic.severity,
+              providerId: entry.id,
+              providerName: entry.name
+            };
+          });
+          finish({ issues, assessment: { id: entry.id, name: entry.name, status: issues.length ? "findings" : "passed" } });
+        } catch (error) {
+          finish(failed("invalid-result", messageOf(error)));
+        }
+      }, (error) => {
+        finish(failed("exception", messageOf(error)));
+      });
+    });
+  }
+};
+
+// scan.ts
+function counts(outcomes) {
+  return {
+    candidates: outcomes.length,
+    validated: outcomes.filter((o) => o.status === "validated").length,
+    unreadable: outcomes.filter((o) => o.status === "unreadable").length,
+    unprocessed: outcomes.filter((o) => o.status === "unprocessed").length
+  };
+}
+async function collectVault(host, settings, context) {
+  var _a, _b, _c, _d, _e;
+  context.guard();
+  const now = new Date(context.now.getTime());
+  const metadata = reportMetadata(settings, { ...context, now });
+  const configDir = host.configDir;
+  const included = (path) => path !== configDir && !path.startsWith(configDir + "/") && !isExcluded(path, settings);
+  let files, folders;
+  try {
+    files = host.files().filter((file) => included(file.path)).sort((a, b) => a.path.localeCompare(b.path));
+    folders = settings.reportIndexGaps ? host.folders(settings).filter((folder) => included(folder.path)).sort((a, b) => a.path.localeCompare(b.path)) : [];
+  } catch (error) {
+    context.guard();
+    throw apiError("unavailable", `Cannot enumerate the configured vault scope: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const pending = (path) => ({ path, status: "unprocessed", issues: [] });
+  const fileOutcomes = files.map((file) => pending(file.path));
+  const folderOutcomes = folders.map((folder) => pending(folder.path));
+  const jobs = [
+    ...files.map((file, index) => async () => {
+      var _a2;
+      const outcome = fileOutcomes[index];
+      let content;
+      try {
+        content = await file.read();
+      } catch (error) {
+        failed(outcome, error);
+        return;
+      }
+      context.guard();
+      if ((_a2 = context.signal) == null ? void 0 : _a2.aborted) return;
+      if (context.evaluateNote) {
+        const result = await context.evaluateNote(file.path, content);
+        context.guard();
+        outcome.issues = result.issues;
+        outcome.extensions = result.extensions;
+      } else outcome.issues = validateContent(file.path, content, !file.path.includes("/"), settings, now);
+      outcome.status = "validated";
+    }),
+    ...folders.map((folder, index) => async () => {
+      var _a2;
+      const outcome = folderOutcomes[index];
+      let result;
+      try {
+        result = await folder.check(settings);
+      } catch (error) {
+        failed(outcome, error);
+        return;
+      }
+      context.guard();
+      if ((_a2 = context.signal) == null ? void 0 : _a2.aborted) return;
+      outcome.status = "validated";
+      if (result) {
+        outcome.findingPath = result.path;
+        outcome.issues = result.issues.map((issue) => ({ ...issue }));
+      }
+    })
+  ];
+  function failed(outcome, error) {
+    var _a2;
+    context.guard();
+    if ((_a2 = context.signal) == null ? void 0 : _a2.aborted) return;
+    outcome.status = "unreadable";
+    outcome.error = { code: "read-failed", message: error instanceof Error ? error.message : String(error) };
+  }
+  const batchSize = Math.max(1, settings.batchSize | 0);
+  for (let start = 0; start < jobs.length; start += batchSize) {
+    context.guard();
+    if ((_a = context.signal) == null ? void 0 : _a.aborted) break;
+    await Promise.all(jobs.slice(start, start + batchSize).map((job) => job()));
+    context.guard();
+    (_b = context.onProgress) == null ? void 0 : _b.call(context, Math.min(start + batchSize, jobs.length), jobs.length);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  context.guard();
+  const fileCounts = counts(fileOutcomes), folderCounts = counts(folderOutcomes);
+  const status = ((_c = context.signal) == null ? void 0 : _c.aborted) ? "cancelled" : fileCounts.unreadable || folderCounts.unreadable ? "partial" : "complete";
+  const assessments = fileOutcomes.flatMap((o) => {
+    var _a2, _b2;
+    return (_b2 = (_a2 = o.extensions) == null ? void 0 : _a2.assessments) != null ? _b2 : [];
+  });
+  const failedExtensions = assessments.filter((a) => a.status === "failed").length;
+  const cancelledExtensions = assessments.filter((a) => a.status === "cancelled").length;
+  return {
+    ...metadata,
+    scope: { kind: "configured-vault", configDir, excludeFolders: [...settings.excludeFolders] },
+    status,
+    extensions: {
+      complete: !failedExtensions && !cancelledExtensions && status === "complete",
+      evaluated: assessments.length,
+      failed: failedExtensions,
+      cancelled: cancelledExtensions
+    },
+    conformance: conformanceFor([...fileOutcomes, ...folderOutcomes].flatMap((o) => o.issues), metadata.checkCoverage, status === "complete"),
+    startedAt: now.toISOString(),
+    finishedAt: ((_e = (_d = context.clock) == null ? void 0 : _d.call(context)) != null ? _e : /* @__PURE__ */ new Date()).toISOString(),
+    files: fileOutcomes,
+    folders: folderOutcomes,
+    counts: { files: fileCounts, folders: folderCounts }
+  };
+}
+function toPublicVaultReport(scan) {
+  const { files, folders, ...metadata } = scan;
+  const outcome = (value) => ({
+    path: value.path,
+    status: value.status,
+    diagnostics: publicDiagnostics(value.issues),
+    ...value.error ? { error: { ...value.error } } : {}
+  });
+  return {
+    ...JSON.parse(JSON.stringify(metadata)),
+    files: files.map(outcome),
+    folders: folders.map((folder) => ({ ...outcome(folder), ...folder.findingPath ? { findingPath: folder.findingPath } : {} }))
+  };
+}
+function scanResults(scan) {
+  const byPath = /* @__PURE__ */ new Map();
+  const add = (outcome, folder) => {
+    var _a, _b;
+    const path = (_a = outcome.findingPath) != null ? _a : folder ? outcome.path && outcome.path !== "/" ? `${outcome.path}/index.md` : "index.md" : outcome.path;
+    const issues = outcome.issues.map((issue) => ({ ...issue }));
+    if (outcome.error) issues.push({ severity: "warning", rule: "scan/read", message: `Unable to read ${outcome.path || "/"}: ${outcome.error.message}` });
+    if (issues.length) byPath.set(path, [...(_b = byPath.get(path)) != null ? _b : [], ...issues]);
+  };
+  for (const outcome of scan.files) add(outcome, false);
+  for (const outcome of scan.folders) add(outcome, true);
+  return [...byPath].map(([path, issues]) => ({ path, issues })).sort((a, b) => a.path.localeCompare(b.path));
+}
+function summarizeScan(scan) {
+  const validated = scan.files.filter((file) => file.status === "validated");
+  const errorFiles = validated.filter((file) => file.issues.some((issue) => issue.severity === "error")).length;
+  const cleanFiles = validated.filter((file) => file.issues.length === 0).length;
+  return {
+    coreErrorFiles: validated.filter((file) => file.issues.some((issue) => issue.severity === "error" && !issue.providerId && !issue.rule.startsWith("portent/"))).length,
+    extensionErrorFiles: validated.filter((file) => file.issues.some((issue) => issue.severity === "error" && issue.providerId)).length,
+    extensions: { ...scan.extensions },
+    status: scan.status,
+    checkCoverage: scan.checkCoverage,
+    conformance: scan.conformance,
+    counts: JSON.parse(JSON.stringify(scan.counts)),
+    cleanFiles,
+    errorFiles,
+    warningFiles: validated.length - errorFiles - cleanFiles,
+    folderFindings: scan.folders.reduce((total, folder) => total + folder.issues.length, 0)
+  };
+}
+
+// api-service.ts
+var ApiController = class {
+  constructor(host, pluginVersion, clock = () => /* @__PURE__ */ new Date()) {
+    this.host = host;
+    this.pluginVersion = pluginVersion;
+    this.clock = clock;
+    this.disposed = false;
+    this.scanning = false;
+    this.validators = new ExtensionRegistry(() => {
+      var _a, _b;
+      if (!this.disposed) (_b = (_a = this.host).validatorsChanged) == null ? void 0 : _b.call(_a);
+    });
+  }
+  get api() {
+    return this.facade;
+  }
+  /** Called only once both host initialization barriers have succeeded. */
+  publish() {
+    if (this.disposed || this.facade) return;
+    this.facade = Object.freeze({
+      apiVersion: 1,
+      pluginVersion: this.pluginVersion,
+      okfVersion: OKF_VERSION,
+      registerValidator: (provider) => {
+        this.ensureAvailable();
+        return this.validators.register(provider);
+      }
+    });
+  }
+  dispose() {
+    this.disposed = true;
+    this.facade = void 0;
+    this.validators.dispose();
+  }
+  /** One pass captures configuration, time and registrations for active/scan/fix. */
+  createPass(signal) {
+    this.ensureAvailable();
+    const settings = snapshotSettings(this.host.settings());
+    const now = new Date(this.clock().getTime()), snapshot = this.validators.snapshot();
+    const metadata = reportMetadata(settings, { pluginVersion: this.pluginVersion, now });
+    return {
+      settings,
+      now,
+      isCurrent: () => !this.disposed && !!this.facade && snapshot.revision === this.validators.revision,
+      evaluate: async (path, content) => {
+        this.ensureAvailable();
+        const core = validateContent(path, content, !path.includes("/"), settings, now);
+        const extensions = await this.validators.validate(path, content, core, now, snapshot, signal);
+        this.ensureAvailable();
+        return {
+          ...metadata,
+          issues: [...core, ...extensions.issues],
+          conformance: conformanceFor(core, metadata.checkCoverage),
+          extensions
+        };
+      }
+    };
+  }
+  /** Internal engine operation, deliberately not on the public registration facade. */
+  async validateContent(input) {
+    this.ensureAvailable();
+    const settings = snapshotSettings(this.host.settings());
+    const report = validateProvidedContent(input, settings, { pluginVersion: this.pluginVersion, now: new Date(this.clock().getTime()) });
+    this.ensureAvailable();
+    return report;
+  }
+  ensureAvailable() {
+    if (this.disposed || !this.facade) throw apiError("unavailable", "OKF Enforcer is unavailable or not ready. Reacquire its API.");
+  }
+  /** Internal collector operation used by Enforcer, not a consumer query SDK. */
+  async scanVault(options) {
+    this.ensureAvailable();
+    if (options !== void 0 && (!options || typeof options !== "object" || Array.isArray(options) || options.signal !== void 0 && (!options.signal || typeof options.signal.aborted !== "boolean"))) {
+      throw apiError("invalid-request", "Expected scan options with an optional AbortSignal.");
+    }
+    if (this.scanning || this.host.activity().busy) throw apiError("busy", "An OKF scan/fix/index operation is already running.");
+    const revision = this.host.activity().revision;
+    const guard = () => {
+      this.ensureAvailable();
+      const activity = this.host.activity();
+      if (activity.busy || activity.revision !== revision) throw apiError("busy", "An OKF operation overlapped this read-only scan; retry when it finishes.");
+    };
+    this.scanning = true;
+    try {
+      const pass = this.createPass(options == null ? void 0 : options.signal);
+      const scan = await collectVault(this.host, pass.settings, {
+        pluginVersion: this.pluginVersion,
+        now: pass.now,
+        evaluateNote: pass.evaluate,
+        clock: this.clock,
+        signal: options == null ? void 0 : options.signal,
+        guard: () => {
+          guard();
+          if (!pass.isCurrent()) throw apiError("busy", "Validators changed during the scan; retry with the current registrations.");
+        }
+      });
+      guard();
+      return toPublicVaultReport(scan);
+    } finally {
+      this.scanning = false;
+    }
+  }
+};
+
+// api.ts
+var VALIDATORS_READY = "okf-enforcer:validators-ready";
+var VALIDATORS_STOPPING = "okf-enforcer:validators-stopping";
+
 // main.ts
 function folderDepth(path) {
   return path === "/" || path === "" ? 0 : path.split("/").length;
 }
-var OkfPlugin = class extends import_obsidian3.Plugin {
+var OkfPlugin = class extends import_obsidian4.Plugin {
   constructor() {
     super(...arguments);
     this.selfWrites = /* @__PURE__ */ new Set();
     this.dirtyIndexFolders = /* @__PURE__ */ new Set();
     this.busy = false;
+    this.operationRevision = 0;
     this.layoutReady = false;
+    this.settingsReady = false;
+    this.unloaded = false;
+    this.activeSequence = 0;
+    this.refreshPending = false;
+    this.refreshVault = false;
     this.lastSummary = null;
     this.pendingResults = null;
     /** The active note's findings, kept here as well as in the pane so a report
      *  opened later starts out pointed at the note already in the editor. */
     this.activeResult = null;
-    this.flushIndexes = (0, import_obsidian3.debounce)(
+    this.flushIndexes = (0, import_obsidian4.debounce)(
       async () => {
         if (!this.settings.autoGenerateIndex) return;
         const folders = [...this.dirtyIndexFolders].sort(
@@ -1453,7 +2004,7 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
         this.dirtyIndexFolders.clear();
         for (const path of folders) {
           const folder = path === "/" || path === "" ? this.app.vault.getRoot() : this.app.vault.getAbstractFileByPath(path);
-          if (folder instanceof import_obsidian3.TFolder && this.folderIsIndexable(folder)) {
+          if (folder instanceof import_obsidian4.TFolder && this.folderIsIndexable(folder)) {
             await this.generateIndexForFolder(folder, false);
           }
         }
@@ -1462,8 +2013,18 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
       true
     );
   }
+  get apiV1() {
+    var _a;
+    return (_a = this.controller) == null ? void 0 : _a.api;
+  }
   onload() {
-    this.settings = { ...DEFAULT_SETTINGS };
+    this.settings = snapshotSettings(DEFAULT_SETTINGS);
+    this.controller = new ApiController({
+      ...this.scanHost(),
+      settings: () => this.settings,
+      activity: () => ({ busy: this.busy, revision: this.operationRevision }),
+      validatorsChanged: () => this.validatorsChanged()
+    }, this.manifest.version);
     const settingsLoaded = this.loadSettings();
     this.registerView(OKF_VIEW_TYPE, (leaf) => new OkfReportView(leaf, this));
     this.statusEl = this.addStatusBarItem();
@@ -1515,7 +2076,7 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
       name: "Generate/refresh index.md for a folder",
       checkCallback: (checking) => {
         const f = this.app.workspace.getActiveFile();
-        if (!f || !(f.parent instanceof import_obsidian3.TFolder)) return false;
+        if (!f || !(f.parent instanceof import_obsidian4.TFolder)) return false;
         if (!checking) void this.generateIndexForFolder(f.parent);
         return true;
       }
@@ -1532,7 +2093,7 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
       name: "Add log.md entry (current folder)",
       checkCallback: (checking) => {
         const f = this.app.workspace.getActiveFile();
-        if (!f || !(f.parent instanceof import_obsidian3.TFolder)) return false;
+        if (!f || !(f.parent instanceof import_obsidian4.TFolder)) return false;
         if (!checking) void this.addLogEntry(f.parent);
         return true;
       }
@@ -1547,16 +2108,18 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
         return true;
       }
     });
-    const liveCheck = (0, import_obsidian3.debounce)(
+    const liveCheck = (0, import_obsidian4.debounce)(
       (file) => {
         void this.onFileChanged(file);
       },
       500,
       true
     );
+    this.register(() => liveCheck.cancel());
+    this.register(() => this.flushIndexes.cancel());
     this.registerEvent(
       this.app.vault.on("modify", (file) => {
-        if (file instanceof import_obsidian3.TFile && file.extension === "md") {
+        if (file instanceof import_obsidian4.TFile && file.extension === "md") {
           if (this.selfWrites.has(file.path)) {
             this.selfWrites.delete(file.path);
             return;
@@ -1567,50 +2130,119 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
     );
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => {
+        var _a;
         if (file && file.extension === "md") void this.validateActive(file, false);
-        else this.setActiveResult(null);
+        else {
+          (_a = this.activeAbort) == null ? void 0 : _a.abort();
+          this.activeSequence++;
+          this.revealActivePath = void 0;
+          this.setActiveResult(null);
+        }
       })
     );
     this.registerEvent(
       this.app.vault.on("create", (file) => {
         if (!this.layoutReady) return;
-        if (file instanceof import_obsidian3.TFolder) {
+        if (file instanceof import_obsidian4.TFolder) {
           this.markIndexDirty(file.path);
           return;
         }
-        if (file instanceof import_obsidian3.TFile && file.extension === "md") {
+        if (file instanceof import_obsidian4.TFile && file.extension === "md") {
           if (this.selfWrites.has(file.path)) {
             this.selfWrites.delete(file.path);
             return;
           }
-          window.setTimeout(() => {
-            void this.onFileChanged(file);
+          const timer = window.setTimeout(() => {
+            if (!this.unloaded) void this.onFileChanged(file);
           }, 300);
+          this.register(() => window.clearTimeout(timer));
         }
       })
     );
     this.registerEvent(
       this.app.vault.on("delete", (file) => {
         if (!this.layoutReady) return;
-        if (file instanceof import_obsidian3.TFile && file.extension !== "md") return;
+        if (file instanceof import_obsidian4.TFile && file.extension !== "md") return;
         this.markIndexDirty(parentPath(file.path));
       })
     );
     this.registerEvent(
       this.app.vault.on("rename", (file, oldPath) => {
         if (!this.layoutReady) return;
-        if (file instanceof import_obsidian3.TFile && file.extension !== "md") return;
+        if (file instanceof import_obsidian4.TFile && file.extension !== "md") return;
         this.markIndexDirty(parentPath(oldPath));
         this.markIndexDirty(parentPath(file.path));
       })
     );
-    void settingsLoaded.catch(() => void 0).then(() => this.addSettingTab(new OkfSettingTab(this.app, this)));
-    this.app.workspace.onLayoutReady(() => {
-      this.layoutReady = true;
-      window.setTimeout(() => {
-        void this.startupPass();
-      }, 1500);
+    void settingsLoaded.then(() => {
+      if (this.unloaded) return;
+      this.settingsReady = true;
+      this.addSettingTab(new OkfSettingTab(this.app, this));
+      this.initializeValidation();
+    }, (error) => {
+      if (this.unloaded) return;
+      console.error("OKF settings failed to load; validation API remains unavailable", error);
+      this.statusEl.setText("OKF: unavailable");
+      this.addSettingTab(new OkfSettingTab(this.app, this));
     });
+    this.app.workspace.onLayoutReady(() => {
+      if (this.unloaded) return;
+      this.layoutReady = true;
+      this.initializeValidation();
+    });
+  }
+  initializeValidation() {
+    if (this.unloaded || !this.settingsReady || !this.layoutReady || this.apiV1) return;
+    this.controller.publish();
+    this.app.workspace.trigger(VALIDATORS_READY);
+    this.requestValidationRefresh(false);
+    this.startupTimer = window.setTimeout(() => {
+      if (!this.unloaded) void this.startupPass();
+    }, 1500);
+  }
+  scanHost() {
+    return {
+      configDir: this.app.vault.configDir,
+      files: () => this.app.vault.getMarkdownFiles().map((file) => ({ path: file.path, read: () => this.app.vault.read(file) })),
+      folders: (settings) => this.indexableFolders(settings).map((folder) => ({
+        path: folder.path,
+        check: () => this.indexGapsForFolder(folder, settings)
+      }))
+    };
+  }
+  validatorsChanged() {
+    var _a, _b, _c;
+    if (this.unloaded) return;
+    (_a = this.activeAbort) == null ? void 0 : _a.abort();
+    (_b = this.scanAbort) == null ? void 0 : _b.abort();
+    this.activeSequence++;
+    this.setActiveResult(null);
+    const hadReport = !!this.lastSummary || !!this.pendingResults || this.busy;
+    this.lastSummary = null;
+    this.pendingResults = null;
+    (_c = this.getReportView()) == null ? void 0 : _c.invalidate();
+    this.requestValidationRefresh(hadReport);
+  }
+  requestValidationRefresh(vault) {
+    if (this.unloaded) return;
+    this.refreshPending = true;
+    this.refreshVault || (this.refreshVault = vault);
+    if (this.refreshTimer !== void 0 || this.busy || !this.apiV1) return;
+    this.refreshTimer = window.setTimeout(() => {
+      this.refreshTimer = void 0;
+      if (this.unloaded || this.busy) return;
+      const scan = this.refreshVault;
+      this.refreshPending = false;
+      this.refreshVault = false;
+      const file = this.app.workspace.getActiveFile();
+      if ((file == null ? void 0 : file.extension) === "md") void this.refreshActive(file);
+      if (scan) void this.scanVault(false, true);
+    }, 40);
+  }
+  async refreshActive(file) {
+    var _a;
+    if (((_a = this.activeWork) == null ? void 0 : _a.path) === file.path && this.activeWork.current()) return;
+    await this.validateActive(file, false);
   }
   /**
    * The startup work, once the workspace has settled: bring the indexes up to
@@ -1623,15 +2255,27 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
    * overlapping them would mean one silently doing nothing.
    */
   async startupPass() {
+    if (this.unloaded || !this.apiV1) return;
     if (this.settings.autoGenerateIndex && this.settings.generateIndexOnStartup) {
       await this.generateAllIndexes(true);
     }
     if (this.settings.scanOnStartup) await this.scanVault(false, true);
   }
   onunload() {
+    var _a, _b, _c;
+    this.unloaded = true;
+    window.clearTimeout(this.startupTimer);
+    window.clearTimeout(this.refreshTimer);
+    (_a = this.activeAbort) == null ? void 0 : _a.abort();
+    (_b = this.scanAbort) == null ? void 0 : _b.abort();
+    this.activeSequence++;
+    this.revealActivePath = void 0;
+    (_c = this.controller) == null ? void 0 : _c.dispose();
+    this.app.workspace.trigger(VALIDATORS_STOPPING);
   }
   async loadSettings() {
     const saved = await this.loadData();
+    if (this.unloaded) return;
     Object.assign(this.settings, DEFAULT_SETTINGS);
     if (!saved) return;
     for (const key of Object.keys(DEFAULT_SETTINGS)) {
@@ -1650,6 +2294,7 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
   }
   async saveSettings() {
     await this.saveData(this.settings);
+    this.validatorsChanged();
   }
   isConcept(file) {
     if (file.extension !== "md") return false;
@@ -1659,10 +2304,10 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
   isRoot(file) {
     return !file.path.includes("/");
   }
-  candidateFiles() {
+  candidateFiles(settings = this.settings) {
     const configDir = this.app.vault.configDir;
     return this.app.vault.getMarkdownFiles().filter(
-      (f) => !f.path.startsWith(configDir + "/") && !isExcluded(f.path, this.settings)
+      (f) => !f.path.startsWith(configDir + "/") && !isExcluded(f.path, settings)
     );
   }
   /** Current report view, if open. */
@@ -1694,6 +2339,7 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
     }
   }
   async onFileChanged(file) {
+    if (this.unloaded || !this.apiV1) return;
     if (!this.isConcept(file)) return;
     if (this.settings.fixOnSave && !isReserved(file.path)) {
       const n = await this.fixFile(file, false);
@@ -1734,6 +2380,7 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
    * With no active note, fall back to a full vault scan + report.
    */
   async onStatusClick() {
+    if (!this.apiV1 || this.unloaded) return;
     const file = this.app.workspace.getActiveFile();
     if (!file || file.extension !== "md" || isReserved(file.path)) {
       await this.scanVault(true, false);
@@ -1749,20 +2396,15 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
     const hadRequiredError = preIssues.some((i) => i.severity === "error");
     await this.fixFile(file, false);
     content = await this.app.vault.read(file);
-    const postIssues = validateContent(
-      file.path,
-      content,
-      this.isRoot(file),
-      this.settings
-    );
-    this.updateStatus(postIssues, content);
-    const remainingErrors = postIssues.filter((i) => i.severity === "error");
+    const postIssues = (await this.controller.createPass().evaluate(file.path, content)).issues;
+    await this.validateActive(file, true);
+    const remainingErrors = postIssues.filter((i) => i.severity === "error" && !i.providerId);
     if (remainingErrors.length > 0) {
       this.promptForRequiredFields(file, remainingErrors);
     } else if (hadRequiredError) {
       this.promptForRequiredFields(file, preIssues.filter((i) => i.severity === "error"));
     } else {
-      new import_obsidian3.Notice("OKF: note is conformant \u2705");
+      new import_obsidian4.Notice(postIssues.some((i) => i.providerId) ? "OKF core checks passed; extension findings remain in the report." : "OKF: core checks passed \u2705");
     }
   }
   /** Open a modal asking the user to supply required OKF fields. */
@@ -1770,24 +2412,53 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
     new OkfPromptModal(this.app, this, file, errors).open();
   }
   async validateActive(file, openReport) {
-    const content = await this.app.vault.read(file);
-    const issues = validateContent(
-      file.path,
-      content,
-      this.isRoot(file),
-      this.settings
-    );
-    issues.push(...await this.indexGapsForActive(file));
-    this.updateStatus(issues, content);
-    this.setActiveResult({ path: file.path, issues });
-    if (openReport) {
-      this.renderResults(issues.length ? [{ path: file.path, issues }] : [], 1);
-      void this.activateView();
-      if (!issues.length) new import_obsidian3.Notice("OKF: active note is conformant \u2705");
+    var _a;
+    if (openReport) this.revealActivePath = file.path;
+    else if (this.revealActivePath !== file.path) this.revealActivePath = void 0;
+    (_a = this.activeAbort) == null ? void 0 : _a.abort();
+    const token = ++this.activeSequence;
+    this.setActiveResult(null);
+    if (!this.apiV1 || this.unloaded) return;
+    if (!this.isConcept(file) || file.path.startsWith(this.app.vault.configDir + "/")) return;
+    const abort = this.activeAbort = new AbortController(), pass = this.controller.createPass(abort.signal);
+    const current = () => {
+      var _a2;
+      return !this.unloaded && !abort.signal.aborted && token === this.activeSequence && pass.isCurrent() && ((_a2 = this.app.workspace.getActiveFile()) == null ? void 0 : _a2.path) === file.path;
+    };
+    const work = this.activeWork = { path: file.path, current };
+    try {
+      const content = await this.app.vault.read(file);
+      if (!current()) return;
+      const result = await pass.evaluate(file.path, content);
+      result.issues.push(...await this.indexGapsForActive(file, pass.settings));
+      if (!current()) return;
+      this.updateStatus(result.issues, content, result.conformance, result.extensions.complete);
+      this.setActiveResult({
+        path: file.path,
+        issues: result.issues,
+        conformance: result.conformance,
+        extensionsComplete: result.extensions.complete
+      });
+      if (this.revealActivePath === file.path) {
+        this.revealActivePath = void 0;
+        await this.activateView();
+      }
+    } catch (error) {
+      if (!current()) return;
+      const issues = [{ severity: "warning", rule: "scan/read", message: `Validation incomplete: ${String(error)}` }];
+      this.updateStatus(issues, void 0, "unknown", false);
+      this.setActiveResult({ path: file.path, issues, conformance: "unknown", extensionsComplete: false });
+      if (this.revealActivePath === file.path) {
+        this.revealActivePath = void 0;
+        await this.activateView();
+      }
+    } finally {
+      if (this.activeWork === work) this.activeWork = void 0;
     }
   }
-  updateStatus(issues, content) {
-    const errs = issues.filter((i) => i.severity === "error").length;
+  updateStatus(issues, content, conformance = "unknown", extensionsComplete = true) {
+    const errs = issues.filter((i) => i.severity === "error" && !i.providerId && !i.rule.startsWith("portent/")).length;
+    const extensionErrors = issues.filter((i) => i.severity === "error" && i.providerId).length;
     const warns = issues.filter((i) => i.severity === "warning").length;
     const tier = this.settings.warnTrustFields && content !== void 0 ? trustTierOfContent(content) : null;
     this.statusEl.removeClass(
@@ -1795,7 +2466,10 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
       "okf-statusbar-bad",
       "okf-statusbar-warn"
     );
-    if (errs > 0) {
+    if (conformance === "unknown") {
+      this.statusEl.setText("OKF ? incomplete");
+      this.statusEl.addClass("okf-statusbar-warn");
+    } else if (errs > 0) {
       this.statusEl.setText(`OKF \u2716 ${errs}`);
       this.statusEl.addClass("okf-statusbar-bad");
     } else if (warns > 0) {
@@ -1805,108 +2479,105 @@ var OkfPlugin = class extends import_obsidian3.Plugin {
       this.statusEl.setText("OKF \u2713");
       this.statusEl.addClass("okf-statusbar-ok");
     }
+    if (extensionErrors) this.statusEl.setText(this.statusEl.getText() + ` \xB7 Ext \u2716 ${extensionErrors}`);
+    if (!extensionsComplete) this.statusEl.setText(this.statusEl.getText() + " \xB7 Ext incomplete");
     if (issues.length === 0) {
-      const lines = ["Active note conforms to OKF v0.2"];
+      const lines = [conformance === "conformant" ? "Active note conforms to OKF v0.2" : "Core conformance unknown: incomplete/reduced checks"];
       if (tier) lines.push(`Trust tier: ${tier}`);
       lines.push("");
-      lines.push("Click to scan the whole vault");
+      lines.push("Click to fix core fields and open the report");
       this.statusEl.setAttribute("aria-label", lines.join("\n"));
     } else {
-      const lines = issues.slice(0, 8).map((i) => `${i.severity === "error" ? "\u2716" : "\u26A0"} ${i.rule} ${i.message}`);
+      const lines = [`Core OKF: ${conformance}; extensions: ${extensionsComplete ? "complete" : "incomplete"}`, ...issues.slice(0, 8).map((i) => {
+        var _a;
+        return `${i.severity === "error" ? "\u2716" : "\u26A0"} [${(_a = i.providerName) != null ? _a : "OKF"}] ${i.rule} ${i.message}`;
+      })];
       if (issues.length > 8) lines.push(`\u2026and ${issues.length - 8} more`);
       if (tier) {
         lines.push("");
         lines.push(`Trust tier: ${tier}`);
       }
       lines.push("");
-      lines.push("Click to scan the whole vault");
+      lines.push("Click to fix core fields and open the report");
       this.statusEl.setAttribute("aria-label", lines.join("\n"));
     }
   }
   /** Vault-wide summary tooltip on the status bar (set after a full scan). */
   refreshStatusTooltip() {
     if (!this.lastSummary) return;
-    const { scanned, errFiles, warnFiles } = this.lastSummary;
-    const ok = scanned - errFiles - warnFiles;
+    const s = this.lastSummary;
     this.statusEl.setAttribute(
       "aria-label",
-      `OKF v0.2 \u2014 ${scanned} notes scanned
-\u2713 ${ok} conformant
-\u2716 ${errFiles} with errors
-\u26A0 ${warnFiles} warnings only
+      `Core OKF: ${s.conformance} (${s.checkCoverage} checks)
+${s.counts.files.validated}/${s.counts.files.candidates} notes validated; ${s.coreErrorFiles} with core errors
+${s.extensionErrorFiles} with extension errors; extensions ${s.extensions.complete ? "complete" : "incomplete"}
+${s.counts.files.unreadable} unreadable, ${s.counts.files.unprocessed} unprocessed
 
 Click to open the report`
     );
   }
   async scanVault(reveal = true, silent = false) {
+    var _a, _b, _c;
+    if (this.unloaded || !this.apiV1) return;
     if (this.busy) {
-      if (!silent) new import_obsidian3.Notice("OKF: a scan/fix is already running\u2026");
+      if (!silent) new import_obsidian4.Notice("OKF: a scan/fix is already running\u2026");
       return;
     }
     this.busy = true;
+    this.operationRevision++;
+    const abort = this.scanAbort = new AbortController(), pass = this.controller.createPass(abort.signal);
+    const current = () => !this.unloaded && !abort.signal.aborted && pass.isCurrent();
     try {
-      const files = this.candidateFiles();
-      const results = [];
-      await this.processQueue(
-        files,
-        async (f) => {
-          const content = await this.app.vault.read(f);
-          const issues = validateContent(
-            f.path,
-            content,
-            this.isRoot(f),
-            this.settings
-          );
-          if (issues.length) results.push({ path: f.path, issues });
+      if (!silent) (_a = this.getReportView()) == null ? void 0 : _a.showProgress("OKF: scanning");
+      const scan = await collectVault(this.scanHost(), pass.settings, {
+        pluginVersion: this.manifest.version,
+        now: pass.now,
+        signal: abort.signal,
+        evaluateNote: pass.evaluate,
+        guard: () => {
+          if (this.unloaded) throw new Error("OKF unloaded");
         },
-        silent ? void 0 : "OKF: scanning"
-      );
-      if (this.settings.reportIndexGaps) {
-        const byPath = new Map(results.map((r) => [r.path, r]));
-        await this.processQueue(
-          this.indexableFolders(),
-          async (folder) => {
-            const gaps = await this.indexGapsForFolder(folder);
-            if (!gaps) return;
-            const at = byPath.get(gaps.path);
-            if (at) at.issues.push(...gaps.issues);
-            else {
-              byPath.set(gaps.path, gaps);
-              results.push(gaps);
-            }
-          },
-          silent ? void 0 : "OKF: checking indexes"
-        );
-      }
-      results.sort((a, b) => a.path.localeCompare(b.path));
-      this.renderResults(results, files.length);
+        onProgress: (done, total) => {
+          var _a2;
+          if (!silent && current()) (_a2 = this.getReportView()) == null ? void 0 : _a2.setProgress(total ? done / total : 1, "OKF: scanning");
+        }
+      });
+      if (!current()) return;
+      const results = scanResults(scan), summary = summarizeScan(scan);
+      this.renderResults(results, scan.counts.files.candidates, summary);
       const active = this.app.workspace.getActiveFile();
-      if (active && files.some((f) => f.path === active.path)) {
-        const hit = results.find((r) => r.path === active.path);
-        this.setActiveResult({ path: active.path, issues: hit ? hit.issues : [] });
-      }
-      const errFiles = results.filter(
-        (r) => r.issues.some((i) => i.severity === "error")
-      ).length;
-      const warnFiles = results.length - errFiles;
-      this.lastSummary = { scanned: files.length, errFiles, warnFiles };
+      if ((active == null ? void 0 : active.extension) === "md") await this.refreshActive(active);
+      if (!current()) return;
+      this.lastSummary = summary;
       this.refreshStatusTooltip();
       if (reveal && !silent) await this.activateView();
       if (!silent) {
-        new import_obsidian3.Notice(
-          `OKF: scanned ${files.length} notes \u2014 ${errFiles} with errors, ${warnFiles} with warnings only.`
+        new import_obsidian4.Notice(
+          `OKF: ${scan.counts.files.validated}/${scan.counts.files.candidates} notes validated \u2014 core ${scan.conformance}; ${summary.extensionErrorFiles} with extension errors${scan.extensions.complete ? "" : "; extension checks incomplete"}.`
         );
       }
+    } catch (error) {
+      if (current()) {
+        this.lastSummary = null;
+        this.pendingResults = null;
+        (_b = this.getReportView()) == null ? void 0 : _b.invalidate();
+        this.statusEl.setText("OKF ? scan incomplete");
+        console.error("OKF scan failed", error);
+        if (!silent) new import_obsidian4.Notice(`OKF: scan incomplete \u2014 ${String(error)}`);
+      }
     } finally {
+      (_c = this.getReportView()) == null ? void 0 : _c.hideProgress();
       this.busy = false;
+      this.scanAbort = void 0;
+      if (this.refreshPending) this.requestValidationRefresh(this.refreshVault);
     }
   }
-  renderResults(results, scanned) {
+  renderResults(results, scanned, summary) {
     const leaf = this.app.workspace.getLeavesOfType(OKF_VIEW_TYPE)[0];
     if (leaf && leaf.view instanceof OkfReportView) {
-      leaf.view.setResults(results, scanned);
+      leaf.view.setResults(results, scanned, summary);
     } else {
-      this.pendingResults = { results, scanned };
+      this.pendingResults = { results, scanned, summary };
     }
   }
   /**
@@ -1916,11 +2587,13 @@ Click to open the report`
    * scans would have the summary chips reporting a vault nobody scanned.
    */
   setActiveResult(r) {
-    var _a, _b, _c;
+    var _a, _b, _c, _d, _e;
     this.activeResult = r;
-    (_c = this.getReportView()) == null ? void 0 : _c.setActive((_a = r == null ? void 0 : r.path) != null ? _a : null, (_b = r == null ? void 0 : r.issues) != null ? _b : []);
+    (_e = this.getReportView()) == null ? void 0 : _e.setActive((_a = r == null ? void 0 : r.path) != null ? _a : null, (_b = r == null ? void 0 : r.issues) != null ? _b : [], (_c = r == null ? void 0 : r.conformance) != null ? _c : "unknown", (_d = r == null ? void 0 : r.extensionsComplete) != null ? _d : false);
   }
   async fixFile(file, notify) {
+    var _a, _b;
+    if (this.unloaded || !this.apiV1) return 0;
     const content = await this.app.vault.read(file);
     const issues = validateContent(
       file.path,
@@ -1930,7 +2603,7 @@ Click to open the report`
     );
     if (isReserved(file.path)) {
       if (notify)
-        new import_obsidian3.Notice("OKF: reserved files (index/log) are not auto-fixable.");
+        new import_obsidian4.Notice("OKF: reserved files (index/log) are not auto-fixable.");
       return 0;
     }
     const { content: fixed, applied } = applyFixes(
@@ -1941,13 +2614,16 @@ Click to open the report`
       this.settings.autoMigrateOnFix
     );
     if (applied.length > 0 && fixed !== content) {
+      if (this.unloaded) return 0;
       this.selfWrites.add(file.path);
       await this.app.vault.modify(file, fixed);
+      if (!this.busy && ((_a = this.app.workspace.getActiveFile()) == null ? void 0 : _a.path) === file.path) await this.validateActive(file, notify);
       if (notify)
-        new import_obsidian3.Notice(`OKF fixed ${file.basename}: ${applied.join(", ")}`);
+        new import_obsidian4.Notice(`OKF fixed ${file.basename}: ${applied.join(", ")}`);
       return applied.length;
     }
-    if (notify) new import_obsidian3.Notice("OKF: nothing auto-fixable on this note.");
+    if (!this.busy && ((_b = this.app.workspace.getActiveFile()) == null ? void 0 : _b.path) === file.path) await this.validateActive(file, notify);
+    if (notify) new import_obsidian4.Notice("OKF: nothing auto-fixable on this note.");
     return 0;
   }
   /**
@@ -1956,6 +2632,7 @@ Click to open the report`
    * that ordinary save-time auto-fix deliberately skips.
    */
   async migrateActive(file) {
+    if (this.unloaded || !this.apiV1) return;
     const content = await this.app.vault.read(file);
     const issues = validateContent(
       file.path,
@@ -1973,16 +2650,18 @@ Click to open the report`
     if (applied.length > 0 && fixed !== content) {
       this.selfWrites.add(file.path);
       await this.app.vault.modify(file, fixed);
-      new import_obsidian3.Notice(`OKF migrated ${file.basename}: ${applied.join(", ")}`);
+      new import_obsidian4.Notice(`OKF migrated ${file.basename}: ${applied.join(", ")}`);
     } else {
-      new import_obsidian3.Notice("OKF: nothing to migrate \u2014 note already uses v0.2 fields.");
+      new import_obsidian4.Notice("OKF: nothing to migrate \u2014 note already uses v0.2 fields.");
     }
+    await this.validateActive(file, false);
   }
   /**
    * Write user-supplied frontmatter values (from the prompt modal) into a note,
    * using Obsidian's safe frontmatter editor. Empty values are skipped.
    */
   async setFrontmatterFields(file, fields) {
+    if (this.unloaded || !this.apiV1) return;
     this.selfWrites.add(file.path);
     await this.app.fileManager.processFrontMatter(
       file,
@@ -1993,21 +2672,16 @@ Click to open the report`
         }
       }
     );
-    const content = await this.app.vault.read(file);
-    const issues = validateContent(
-      file.path,
-      content,
-      this.isRoot(file),
-      this.settings
-    );
-    this.updateStatus(issues, content);
+    await this.validateActive(file, false);
   }
   async fixAll() {
+    if (this.unloaded || !this.apiV1) return;
     if (this.busy) {
-      new import_obsidian3.Notice("OKF: a scan/fix is already running\u2026");
+      new import_obsidian4.Notice("OKF: a scan/fix is already running\u2026");
       return;
     }
     this.busy = true;
+    this.operationRevision++;
     let changed = 0;
     try {
       const files = this.candidateFiles().filter((f) => !isReserved(f.path));
@@ -2021,19 +2695,20 @@ Click to open the report`
       );
     } finally {
       this.busy = false;
+      if (this.refreshPending) this.requestValidationRefresh(this.refreshVault);
     }
-    new import_obsidian3.Notice(`OKF: auto-fixed ${changed} note(s).`);
+    new import_obsidian4.Notice(`OKF: auto-fixed ${changed} note(s).`);
     await this.scanVault();
   }
   /** Writes the folder's index.md; returns whether the file changed on disk. */
   async generateIndexForFolder(folder, notify = true) {
     if (!folder) {
-      if (notify) new import_obsidian3.Notice("OKF: no folder for the active note.");
+      if (notify) new import_obsidian4.Notice("OKF: no folder for the active note.");
       return false;
     }
     const indexPath = folder.path === "/" || folder.path === "" ? "index.md" : `${folder.path}/index.md`;
     const existing = this.app.vault.getAbstractFileByPath(indexPath);
-    const current = existing instanceof import_obsidian3.TFile ? await this.app.vault.read(existing) : null;
+    const current = existing instanceof import_obsidian4.TFile ? await this.app.vault.read(existing) : null;
     const kept = current === null ? "" : sectionBlock(current, this.settings.indexSubdirDescSection);
     const entries = await this.indexEntriesFor(folder, true);
     return await this.writeIndex(
@@ -2052,14 +2727,14 @@ Click to open the report`
    * a caller that only means to look — the gap report — passes false and leaves
    * the vault untouched.
    */
-  async indexEntriesFor(folder, fillMissingChildren) {
+  async indexEntriesFor(folder, fillMissingChildren, settings = this.settings) {
     var _a, _b, _c;
     const children = folder.children;
     const byType = /* @__PURE__ */ new Map();
     const subdirs = [];
     const files = [];
     for (const child of children) {
-      if (child instanceof import_obsidian3.TFile) {
+      if (child instanceof import_obsidian4.TFile) {
         if (isReserved(child.path)) continue;
         if (child.extension !== "md") {
           files.push({
@@ -2086,12 +2761,12 @@ Click to open the report`
         };
         if (bucket) bucket.push(entry);
         else byType.set(section, [entry]);
-      } else if (child instanceof import_obsidian3.TFolder) {
-        if (!this.folderIsIndexable(child)) continue;
+      } else if (child instanceof import_obsidian4.TFolder) {
+        if (!this.folderIsIndexable(child, settings)) continue;
         let childIndex = this.app.vault.getAbstractFileByPath(
           `${child.path}/index.md`
         );
-        if (fillMissingChildren && (!(childIndex instanceof import_obsidian3.TFile) || this.indexesMissingBelow(child))) {
+        if (fillMissingChildren && (!(childIndex instanceof import_obsidian4.TFile) || this.indexesMissingBelow(child))) {
           await this.generateIndexForFolder(child, false);
           childIndex = this.app.vault.getAbstractFileByPath(
             `${child.path}/index.md`
@@ -2101,7 +2776,7 @@ Click to open the report`
           section: INDEX_SECTIONS.subdirs,
           link: `${encodeLink(child.name)}/index.md`,
           title: child.name,
-          desc: childIndex instanceof import_obsidian3.TFile ? await this.folderDescription(childIndex) : ""
+          desc: childIndex instanceof import_obsidian4.TFile ? await this.folderDescription(childIndex, settings) : ""
         });
       }
     }
@@ -2145,7 +2820,7 @@ ${out}`;
       }
     }
     const existing = this.app.vault.getAbstractFileByPath(indexPath);
-    if (existing instanceof import_obsidian3.TFile) {
+    if (existing instanceof import_obsidian4.TFile) {
       if (current === out) return false;
       this.selfWrites.add(indexPath);
       await this.app.vault.modify(existing, out);
@@ -2153,7 +2828,7 @@ ${out}`;
       this.selfWrites.add(indexPath);
       await this.app.vault.create(indexPath, out);
     }
-    if (notify) new import_obsidian3.Notice(`OKF: wrote ${indexPath}`);
+    if (notify) new import_obsidian4.Notice(`OKF: wrote ${indexPath}`);
     return true;
   }
   /**
@@ -2170,11 +2845,11 @@ ${out}`;
    * Findings are filed against the index's path, which is the file to edit, and
    * reads as "this should be here" in the case where it isn't.
    */
-  async indexGapsForFolder(folder) {
+  async indexGapsForFolder(folder, settings = this.settings) {
     const root = folder.path === "/" || folder.path === "";
     const indexPath = root ? "index.md" : `${folder.path}/index.md`;
     const index = this.app.vault.getAbstractFileByPath(indexPath);
-    if (!(index instanceof import_obsidian3.TFile)) {
+    if (!(index instanceof import_obsidian4.TFile)) {
       return {
         path: indexPath,
         issues: [
@@ -2186,7 +2861,7 @@ ${out}`;
         ]
       };
     }
-    const entries = await this.indexEntriesFor(folder, false);
+    const entries = await this.indexEntriesFor(folder, false, settings);
     if (entries.length === 0) return null;
     const base = root ? "" : `${folder.path}/`;
     const unlisted = unlistedEntries(
@@ -2215,12 +2890,12 @@ ${out}`;
    * scan would never reach — excluded, or under Obsidian's config dir — doesn't
    * acquire findings merely by being open.
    */
-  async indexGapsForActive(file) {
-    if (!this.settings.reportIndexGaps) return [];
+  async indexGapsForActive(file, settings = this.settings) {
+    if (!settings.reportIndexGaps) return [];
     if (isReserved(file.path) !== "index") return [];
     const folder = file.parent;
-    if (!folder || !this.folderIsIndexable(folder)) return [];
-    const gaps = await this.indexGapsForFolder(folder);
+    if (!folder || !this.folderIsIndexable(folder, settings)) return [];
+    const gaps = await this.indexGapsForFolder(folder, settings);
     return gaps ? gaps.issues : [];
   }
   /**
@@ -2229,8 +2904,8 @@ ${out}`;
    * frontmatter (§8), so a body section is the only place a folder can say what
    * it is for.
    */
-  async folderDescription(index) {
-    const section = this.settings.indexSubdirDescSection.trim();
+  async folderDescription(index, settings = this.settings) {
+    const section = settings.indexSubdirDescSection.trim();
     if (!section) return "";
     return sectionSummary(await this.app.vault.cachedRead(index), section);
   }
@@ -2241,12 +2916,12 @@ ${out}`;
    * can't be reached — except the ones that aren't part of the bundle at all:
    * Obsidian's own config folder and anything the user excluded.
    */
-  folderIsIndexable(folder) {
+  folderIsIndexable(folder, settings = this.settings) {
     const path = folder.path;
     if (path === "/" || path === "") return true;
     const config = this.app.vault.configDir;
     if (path === config || path.startsWith(config + "/")) return false;
-    return !isExcluded(path, this.settings);
+    return !isExcluded(path, settings);
   }
   /**
    * Whether any folder worth listing somewhere below this one still has no
@@ -2256,9 +2931,9 @@ ${out}`;
    */
   indexesMissingBelow(folder) {
     for (const child of folder.children) {
-      if (!(child instanceof import_obsidian3.TFolder)) continue;
+      if (!(child instanceof import_obsidian4.TFolder)) continue;
       if (!this.folderIsIndexable(child)) continue;
-      const has = this.app.vault.getAbstractFileByPath(`${child.path}/index.md`) instanceof import_obsidian3.TFile;
+      const has = this.app.vault.getAbstractFileByPath(`${child.path}/index.md`) instanceof import_obsidian4.TFile;
       if (!has || this.indexesMissingBelow(child)) return true;
     }
     return false;
@@ -2269,24 +2944,26 @@ ${out}`;
    * no notes — empty, or nothing but subfolders — still gets an index, so there
    * is nothing to find it by except the tree itself.
    */
-  indexableFolders() {
+  indexableFolders(settings = this.settings) {
     const list = [];
     const walk = (folder) => {
-      if (!this.folderIsIndexable(folder)) return;
+      if (!this.folderIsIndexable(folder, settings)) return;
       list.push(folder);
       for (const child of folder.children) {
-        if (child instanceof import_obsidian3.TFolder) walk(child);
+        if (child instanceof import_obsidian4.TFolder) walk(child);
       }
     };
     walk(this.app.vault.getRoot());
     return list;
   }
   async generateAllIndexes(silent = false) {
+    if (this.unloaded || !this.apiV1) return;
     if (this.busy) {
-      if (!silent) new import_obsidian3.Notice("OKF: a scan/fix is already running\u2026");
+      if (!silent) new import_obsidian4.Notice("OKF: a scan/fix is already running\u2026");
       return;
     }
     this.busy = true;
+    this.operationRevision++;
     try {
       const list = this.indexableFolders();
       list.sort((a, b) => folderDepth(b.path) - folderDepth(a.path));
@@ -2299,12 +2976,13 @@ ${out}`;
         "OKF: building indexes"
       );
       if (!silent) {
-        new import_obsidian3.Notice(
+        new import_obsidian4.Notice(
           `OKF: updated index.md in ${written} of ${list.length} folder(s).`
         );
       }
     } finally {
       this.busy = false;
+      if (this.refreshPending) this.requestValidationRefresh(this.refreshVault);
     }
   }
   async addLogEntry(folder) {
@@ -2313,7 +2991,7 @@ ${out}`;
     const today = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
     const entry = `* **Update**: `;
     const existing = this.app.vault.getAbstractFileByPath(logPath);
-    if (existing instanceof import_obsidian3.TFile) {
+    if (existing instanceof import_obsidian4.TFile) {
       let content = await this.app.vault.read(existing);
       const heading = `## ${today}`;
       if (content.includes(heading)) {
@@ -2349,9 +3027,9 @@ ${entry}
       );
     }
     const file = this.app.vault.getAbstractFileByPath(logPath);
-    if (file instanceof import_obsidian3.TFile)
+    if (file instanceof import_obsidian4.TFile)
       await this.app.workspace.getLeaf(false).openFile(file);
-    new import_obsidian3.Notice(`OKF: added log entry for ${today}`);
+    new import_obsidian4.Notice(`OKF: added log entry for ${today}`);
   }
   async activateView() {
     const existing = this.app.workspace.getLeavesOfType(OKF_VIEW_TYPE);
@@ -2367,7 +3045,8 @@ ${entry}
       if (this.pendingResults && leaf.view instanceof OkfReportView) {
         leaf.view.setResults(
           this.pendingResults.results,
-          this.pendingResults.scanned
+          this.pendingResults.scanned,
+          this.pendingResults.summary
         );
         this.pendingResults = null;
       }
@@ -2375,7 +3054,7 @@ ${entry}
     }
   }
 };
-var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
+var OkfSettingTab = class extends import_obsidian4.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
@@ -2654,7 +3333,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     for (const spec of this.settingSpecs()) {
-      this.applySpec(new import_obsidian3.Setting(containerEl), spec);
+      this.applySpec(new import_obsidian4.Setting(containerEl), spec);
     }
   }
   /**
@@ -2682,7 +3361,7 @@ var OkfSettingTab = class extends import_obsidian3.PluginSettingTab {
     else this.display();
   }
 };
-var OkfPromptModal = class extends import_obsidian3.Modal {
+var OkfPromptModal = class extends import_obsidian4.Modal {
   constructor(app, plugin, file, errors) {
     super(app);
     this.plugin = plugin;
@@ -2739,7 +3418,7 @@ var OkfPromptModal = class extends import_obsidian3.Modal {
     save.onclick = async () => {
       const type = this.typeValue.trim();
       if (!type) {
-        new import_obsidian3.Notice("OKF: type is required.");
+        new import_obsidian4.Notice("OKF: type is required.");
         typeInput.focus();
         return;
       }
@@ -2748,7 +3427,7 @@ var OkfPromptModal = class extends import_obsidian3.Modal {
         title: this.titleValue,
         description: this.descValue
       });
-      new import_obsidian3.Notice("OKF: fields saved \u2713");
+      new import_obsidian4.Notice("OKF: fields saved \u2713");
       this.close();
     };
     contentEl.onkeydown = (e) => {

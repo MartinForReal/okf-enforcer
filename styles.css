@@ -18,6 +18,7 @@
 
 .okf-summary {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   margin-bottom: 8px;
 }
@@ -202,6 +203,20 @@
 }
 .okf-fixable {
   color: var(--text-accent);
+}
+.okf-source {
+  display: inline-block;
+  color: var(--text-muted);
+  background: var(--background-secondary);
+  border-radius: 3px;
+  padding: 0 4px;
+  margin-right: 4px;
+  font-size: var(--font-ui-smaller);
+}
+.okf-active-verdict, .okf-coverage {
+  color: var(--text-muted);
+  margin: 3px 0 6px;
+  line-height: 1.4;
 }
 .okf-open-link {
   display: inline-block;

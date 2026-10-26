@@ -2,6 +2,8 @@
 import { ItemView, WorkspaceLeaf, TFile } from "obsidian";
 import type OkfPlugin from "./main";
 import { OkfIssue } from "./validator";
+import type { ScanSummary } from "./scan";
+import type { Conformance } from "./validation-types";
 
 export const OKF_VIEW_TYPE = "okf-report-view";
 
@@ -24,6 +26,8 @@ export class OkfReportView extends ItemView {
   plugin: OkfPlugin;
   results: FileResult[] = [];
   scanned = 0;
+  private summary: ScanSummary | null = null;
+  private invalidated = false;
   /** Paths whose file block is expanded. Default collapsed → empty set. */
   private expanded = new Set<string>();
   /** Folders whose group is collapsed. Default expanded → empty set: a group
@@ -33,6 +37,8 @@ export class OkfReportView extends ItemView {
    *  summary keeps counting the vault while this follows the tab. */
   private activePath: string | null = null;
   private activeIssues: OkfIssue[] = [];
+  private activeConformance: Conformance = "unknown";
+  private activeExtensionsComplete = false;
 
   // Persistent skeleton elements (built once, survive list re-renders).
   private progressWrap: HTMLElement | null = null;
@@ -104,9 +110,10 @@ export class OkfReportView extends ItemView {
     this.progressWrap?.addClass("is-hidden");
   }
 
-  setResults(results: FileResult[], scanned: number) {
+  setResults(results: FileResult[], scanned: number, summary?: ScanSummary) {
     this.results = results;
     this.scanned = scanned;
+    this.summary = summary ?? null; this.invalidated = false;
     const paths = new Set(results.map((r) => r.path));
     for (const p of [...this.expanded]) if (!paths.has(p)) this.expanded.delete(p);
     const dirs = new Set(results.map((r) => dirOf(r.path)));
@@ -116,9 +123,16 @@ export class OkfReportView extends ItemView {
 
   /** Point the pane at the note in the editor. Pass null when what is open is
    *  not a markdown note. */
-  setActive(path: string | null, issues: OkfIssue[]) {
+  setActive(path: string | null, issues: OkfIssue[], conformance: Conformance = "unknown", extensionsComplete = false) {
     this.activePath = path;
     this.activeIssues = issues;
+    this.activeConformance = conformance; this.activeExtensionsComplete = extensionsComplete;
+    this.renderBody();
+  }
+
+  /** Registry/settings changed: do not present old findings as current. */
+  invalidate() {
+    this.results = []; this.scanned = 0; this.summary = null; this.invalidated = true;
     this.renderBody();
   }
 
@@ -135,14 +149,18 @@ export class OkfReportView extends ItemView {
   }
 
   private renderSummary(b: HTMLElement) {
-    const errorFiles = this.results.filter(hasError).length;
-    const warnFiles = this.results.length - errorFiles;
-    const passFiles = this.scanned - this.results.length;
-
+    const s = this.summary;
+    if (!s) return;
     const summary = b.createDiv({ cls: "okf-summary" });
-    summary.createSpan({ cls: "okf-chip okf-pass", text: `✓ ${passFiles}` });
-    summary.createSpan({ cls: "okf-chip okf-error", text: `✖ ${errorFiles}` });
-    summary.createSpan({ cls: "okf-chip okf-warn", text: `⚠ ${warnFiles}` });
+    summary.createSpan({ cls: `okf-chip ${s.conformance === "conformant" ? "okf-pass" : "okf-warn"}`, text: `Core OKF: ${s.conformance}` });
+    summary.createSpan({ cls: "okf-chip", text: `${s.counts.files.validated}/${s.counts.files.candidates} notes validated` });
+    summary.createSpan({ cls: `okf-chip ${s.coreErrorFiles ? "okf-error" : "okf-pass"}`, text: `${s.coreErrorFiles} core errors (files)` });
+    summary.createSpan({ cls: `okf-chip ${s.extensionErrorFiles ? "okf-warn" : "okf-pass"}`, text: `${s.extensionErrorFiles} extension errors (files)` });
+    if (s.folderFindings) summary.createSpan({ cls: "okf-chip okf-warn", text: `${s.folderFindings} folder findings` });
+    if (s.status !== "complete" || s.checkCoverage !== "full") {
+      b.createDiv({ cls: "okf-coverage", text: `Core checks incomplete (${s.checkCoverage}; ${s.status}): ${s.counts.files.unreadable} unreadable, ${s.counts.files.unprocessed} unprocessed notes; ${s.counts.folders.unreadable} unreadable, ${s.counts.folders.unprocessed} unprocessed folders.` });
+    }
+    if (!s.extensions.complete) b.createDiv({ cls: "okf-coverage", text: `Extension checks incomplete: ${s.extensions.failed} failed, ${s.extensions.cancelled} cancelled. Core OKF conformance is separate.` });
   }
 
   /**
@@ -157,13 +175,14 @@ export class OkfReportView extends ItemView {
 
     const sec = b.createDiv({ cls: "okf-active" });
     sec.createDiv({ cls: "okf-active-title", text: "Active note" });
+    sec.createDiv({ cls: "okf-active-verdict", text: `Core OKF: ${this.activeConformance} · Extensions: ${this.activeExtensionsComplete ? "complete" : "incomplete"}` });
 
     // Said out loud rather than left blank: an empty section reads as a pane
     // that has lost track of the tab, not as a note with nothing wrong.
     if (!this.activeIssues.length) {
       const line = sec.createDiv({ cls: "okf-active-clean" });
       line.setAttribute("aria-label", `${path} — no issues`);
-      line.createSpan({ cls: "okf-ok", text: "✓" });
+      line.createSpan({ cls: "okf-ok", text: this.activeConformance === "conformant" && this.activeExtensionsComplete ? "✓" : "?" });
       this.renderLabel(line, path, true);
       return;
     }
@@ -172,12 +191,13 @@ export class OkfReportView extends ItemView {
   }
 
   private renderList(b: HTMLElement) {
-    if (this.scanned === 0) {
-      b.createDiv({ cls: "okf-empty", text: "No scan yet — click Rescan." });
+    if (!this.summary) {
+      b.createDiv({ cls: "okf-empty", text: this.invalidated ? "Checks changed — refreshing; previous findings invalidated." : "No scan yet — click Rescan." });
       return;
     }
     if (this.results.length === 0) {
-      b.createDiv({ cls: "okf-empty", text: "✓ All notes conform." });
+      const complete = this.summary.conformance === "conformant" && this.summary.extensions.complete;
+      b.createDiv({ cls: "okf-empty", text: !this.scanned ? "No notes in the configured scope." : complete ? "✓ All checked notes conform; no extension findings." : "Checks incomplete — no complete conformance verdict." });
       return;
     }
 
@@ -278,9 +298,11 @@ export class OkfReportView extends ItemView {
         text: issue.severity === "error" ? "✖" : "⚠",
       });
       const txt = row.createSpan({ cls: "okf-issue-text" });
+      const source = txt.createSpan({ cls: "okf-source", text: issue.providerName ?? (issue.rule.startsWith("portent/") ? "Portent" : "OKF") });
+      source.setAttribute("aria-label", `Source: ${issue.providerId ?? (issue.rule.startsWith("portent/") ? "portent" : "okf")}`);
       txt.createSpan({ text: issue.message + " " });
       txt.createSpan({ cls: "okf-rule", text: issue.rule });
-      if (issue.fix) txt.createSpan({ cls: "okf-fixable", text: " · fixable" });
+      if (issue.fix && !issue.providerId) txt.createSpan({ cls: "okf-fixable", text: " · fixable" });
     }
 
     // Offered only when there is something to open, and never for the note

@@ -1,0 +1,9 @@
+{
+  "id": "example-owner-validator",
+  "name": "Example Owner Validator",
+  "version": "0.0.1",
+  "minAppVersion": "1.7.2",
+  "description": "Example companion that extends OKF Enforcer validation.",
+  "author": "OKF Enforcer contributors",
+  "isDesktopOnly": false
+}

@@ -4,6 +4,7 @@
   "description": "Validate and enforce the Open Knowledge Format (OKF v0.2) in Obsidian.",
   "main": "main.js",
   "scripts": {
+    "test": "node tests/run.mjs",
     "build": "node esbuild.config.mjs",
     "version": "node version-bump.mjs"
   },

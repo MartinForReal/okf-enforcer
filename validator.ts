@@ -23,6 +23,10 @@ export interface OkfIssue {
   rule: string;
   message: string;
   fix?: FixKind;
+  /** Host-owned attribution; extensions cannot supply core fixes. */
+  providerId?: string;
+  providerName?: string;
+  providerFailure?: boolean;
 }
 
 export type FixKind =
@@ -1009,18 +1013,20 @@ export function validateContent(
   path: string,
   content: string,
   isRoot: boolean,
-  settings: OkfSettings
+  settings: OkfSettings,
+  today: Date = new Date()
 ): OkfIssue[] {
   const reserved = isReserved(path);
   if (reserved === "index") return validateIndex(content, isRoot);
   if (reserved === "log") return validateLog(content);
-  return validateConcept(path, content, settings);
+  return validateConcept(path, content, settings, today);
 }
 
 function validateConcept(
   path: string,
   content: string,
-  settings: OkfSettings
+  settings: OkfSettings,
+  today: Date
 ): OkfIssue[] {
   const issues: OkfIssue[] = [];
   const { hasFm, raw } = splitFrontmatter(content);
@@ -1171,7 +1177,7 @@ function validateConcept(
   }
 
   if (settings.warnTrustFields) {
-    issues.push(...validateTrustFamilies(data));
+    issues.push(...validateTrustFamilies(data, today));
   }
 
   if (
@@ -1194,7 +1200,7 @@ function validateConcept(
  * concept missing any of these is still conformant (§11). Gated by
  * `settings.warnTrustFields`.
  */
-function validateTrustFamilies(data: Record<string, unknown>): OkfIssue[] {
+function validateTrustFamilies(data: Record<string, unknown>, today: Date): OkfIssue[] {
   const issues: OkfIssue[] = [];
 
   // `verified` (§5.2): a list of `{ by, at }` events, or a bare mapping.
@@ -1256,7 +1262,7 @@ function validateTrustFamilies(data: Record<string, unknown>): OkfIssue[] {
         rule: "§5.5",
         message: "`stale_after` should be an absolute date (`YYYY-MM-DD`).",
       });
-    } else if (isStale(data)) {
+    } else if (isStale(data, today)) {
       issues.push({
         severity: "warning",
         rule: "§5.5",

@@ -38,6 +38,11 @@ import {
 } from "./validator";
 import { PORTENT_TYPES, PORTENT_STATUSES } from "./portent";
 import { OkfReportView, OKF_VIEW_TYPE, FileResult } from "./report-view";
+import { ApiController } from "./api-service";
+import { VALIDATORS_READY, VALIDATORS_STOPPING, type OkfApiV1 } from "./api";
+import { collectVault, scanResults, summarizeScan, type ScanHost, type ScanSummary } from "./scan";
+import type { Conformance } from "./validation-types";
+import { snapshotSettings } from "./validation";
 
 /**
  * How far a folder sits from the vault root, which is 0. Indexes are written
@@ -55,21 +60,37 @@ export default class OkfPlugin extends Plugin {
   private selfWrites = new Set<string>();
   private dirtyIndexFolders = new Set<string>();
   private busy = false;
+  private operationRevision = 0;
   private layoutReady = false;
-  private lastSummary: { scanned: number; errFiles: number; warnFiles: number } | null =
-    null;
-  private pendingResults: { results: FileResult[]; scanned: number } | null =
-    null;
+  private settingsReady = false;
+  private unloaded = false;
+  private controller?: ApiController;
+  private startupTimer?: number;
+  private refreshTimer?: number;
+  private activeAbort?: AbortController;
+  private scanAbort?: AbortController;
+  private activeSequence = 0;
+  private activeWork?: { path: string; current(): boolean };
+  private revealActivePath?: string;
+  private refreshPending = false;
+  private refreshVault = false;
+  private lastSummary: ScanSummary | null = null;
+  private pendingResults: { results: FileResult[]; scanned: number; summary?: ScanSummary } | null = null;
   /** The active note's findings, kept here as well as in the pane so a report
    *  opened later starts out pointed at the note already in the editor. */
-  private activeResult: { path: string; issues: OkfIssue[] } | null = null;
+  private activeResult: { path: string; issues: OkfIssue[]; conformance?: Conformance; extensionsComplete?: boolean } | null = null;
+
+  get apiV1(): OkfApiV1 | undefined { return this.controller?.api; }
 
   onload() {
     // Start from defaults synchronously so onload returns void (the type
     // Obsidian's Plugin base class expects), then load persisted settings in
     // the background. Event/command handlers read this.settings lazily, so
     // they pick up the loaded values once the async load resolves.
-    this.settings = { ...DEFAULT_SETTINGS };
+    this.settings = snapshotSettings(DEFAULT_SETTINGS);
+    this.controller = new ApiController({ ...this.scanHost(), settings: () => this.settings,
+      activity: () => ({ busy: this.busy, revision: this.operationRevision }),
+      validatorsChanged: () => this.validatorsChanged() }, this.manifest.version);
     const settingsLoaded = this.loadSettings();
 
     this.registerView(OKF_VIEW_TYPE, (leaf) => new OkfReportView(leaf, this));
@@ -160,6 +181,8 @@ export default class OkfPlugin extends Plugin {
       500,
       true
     );
+    this.register(() => liveCheck.cancel());
+    this.register(() => this.flushIndexes.cancel());
     this.registerEvent(
       this.app.vault.on("modify", (file) => {
         if (file instanceof TFile && file.extension === "md") {
@@ -176,7 +199,7 @@ export default class OkfPlugin extends Plugin {
         if (file && file.extension === "md") void this.validateActive(file, false);
         // Anything else in the editor — a PDF, an image, nothing at all — has
         // no OKF verdict to show, so the pane stops claiming one.
-        else this.setActiveResult(null);
+        else { this.activeAbort?.abort(); this.activeSequence++; this.revealActivePath = undefined; this.setActiveResult(null); }
       })
     );
 
@@ -200,7 +223,8 @@ export default class OkfPlugin extends Plugin {
             return;
           }
           // Defer briefly so the importer finishes writing the file body first.
-          window.setTimeout(() => { void this.onFileChanged(file); }, 300);
+          const timer = window.setTimeout(() => { if (!this.unloaded) void this.onFileChanged(file); }, 300);
+          this.register(() => window.clearTimeout(timer));
         }
       })
     );
@@ -231,16 +255,72 @@ export default class OkfPlugin extends Plugin {
     // this.settings still held the defaults would show the defaults for the
     // rest of the session and write them back on the next edit. catch() so a
     // failed read still leaves the user a settings tab, backed by defaults.
-    void settingsLoaded
-      .catch(() => undefined)
-      .then(() => this.addSettingTab(new OkfSettingTab(this.app, this)));
+    void settingsLoaded.then(() => {
+      if (this.unloaded) return;
+      this.settingsReady = true;
+      this.addSettingTab(new OkfSettingTab(this.app, this));
+      this.initializeValidation();
+    }, (error) => {
+      if (this.unloaded) return;
+      console.error("OKF settings failed to load; validation API remains unavailable", error);
+      this.statusEl.setText("OKF: unavailable");
+      this.addSettingTab(new OkfSettingTab(this.app, this));
+    });
 
     this.app.workspace.onLayoutReady(() => {
+      if (this.unloaded) return;
       this.layoutReady = true;
       // The panel is hidden by default simply because we never auto-open it;
       // we do not detach existing leaves, so a user-positioned view is preserved.
-      window.setTimeout(() => { void this.startupPass(); }, 1500);
+      this.initializeValidation();
     });
+  }
+
+  private initializeValidation() {
+    if (this.unloaded || !this.settingsReady || !this.layoutReady || this.apiV1) return;
+    this.controller!.publish();
+    // Custom events are owned by this plugin, not additions to Obsidian's API.
+    (this.app.workspace as unknown as { trigger(name: string): void }).trigger(VALIDATORS_READY);
+    this.requestValidationRefresh(false);
+    this.startupTimer = window.setTimeout(() => { if (!this.unloaded) void this.startupPass(); }, 1500);
+  }
+
+  private scanHost(): ScanHost {
+    return { configDir: this.app.vault.configDir,
+      files: () => this.app.vault.getMarkdownFiles().map((file) => ({ path: file.path, read: () => this.app.vault.read(file) })),
+      folders: (settings) => this.indexableFolders(settings).map((folder) => ({ path: folder.path,
+        check: () => this.indexGapsForFolder(folder, settings) })) };
+  }
+
+  private validatorsChanged() {
+    if (this.unloaded) return;
+    this.activeAbort?.abort(); this.scanAbort?.abort(); this.activeSequence++;
+    this.setActiveResult(null);
+    const hadReport = !!this.lastSummary || !!this.pendingResults || this.busy;
+    this.lastSummary = null; this.pendingResults = null;
+    this.getReportView()?.invalidate();
+    this.requestValidationRefresh(hadReport);
+  }
+
+  private requestValidationRefresh(vault: boolean) {
+    if (this.unloaded) return;
+    this.refreshPending = true; this.refreshVault ||= vault;
+    if (this.refreshTimer !== undefined || this.busy || !this.apiV1) return;
+    this.refreshTimer = window.setTimeout(() => {
+      this.refreshTimer = undefined;
+      if (this.unloaded || this.busy) return;
+      const scan = this.refreshVault; this.refreshPending = false; this.refreshVault = false;
+      const file = this.app.workspace.getActiveFile();
+      if (file?.extension === "md") void this.refreshActive(file);
+      if (scan) void this.scanVault(false, true);
+    }, 40);
+  }
+
+  private async refreshActive(file: TFile) {
+    // A registry/startup/scan refresh must not supersede an equivalent current
+    // pass, especially one the user explicitly asked to reveal.
+    if (this.activeWork?.path === file.path && this.activeWork.current()) return;
+    await this.validateActive(file, false);
   }
 
   /**
@@ -254,6 +334,7 @@ export default class OkfPlugin extends Plugin {
    * overlapping them would mean one silently doing nothing.
    */
   private async startupPass(): Promise<void> {
+    if (this.unloaded || !this.apiV1) return;
     if (this.settings.autoGenerateIndex && this.settings.generateIndexOnStartup) {
       await this.generateAllIndexes(true);
     }
@@ -262,12 +343,19 @@ export default class OkfPlugin extends Plugin {
   }
 
   onunload() {
+    this.unloaded = true;
+    window.clearTimeout(this.startupTimer); window.clearTimeout(this.refreshTimer);
+    this.activeAbort?.abort(); this.scanAbort?.abort(); this.activeSequence++;
+    this.revealActivePath = undefined;
+    this.controller?.dispose();
+    (this.app.workspace as unknown as { trigger(name: string): void }).trigger(VALIDATORS_STOPPING);
     // Intentionally do not detach the view here: Obsidian persists leaf
     // placement, and detaching would reset a user-moved panel on next load.
   }
 
   async loadSettings() {
     const saved = (await this.loadData()) as Record<string, unknown> | null;
+    if (this.unloaded) return;
     // Reset in place rather than assigning a fresh object: the settings tab's
     // row builders close over this.settings, so replacing it would leave the UI
     // reading and writing a copy nothing else ever sees.
@@ -294,6 +382,7 @@ export default class OkfPlugin extends Plugin {
   }
   async saveSettings() {
     await this.saveData(this.settings);
+    this.validatorsChanged();
   }
 
   private isConcept(file: TFile): boolean {
@@ -305,7 +394,7 @@ export default class OkfPlugin extends Plugin {
     return !file.path.includes("/");
   }
 
-  private candidateFiles(): TFile[] {
+  private candidateFiles(settings = this.settings): TFile[] {
     // The config folder name is user-configurable (not always ".obsidian").
     const configDir = this.app.vault.configDir;
     return this.app.vault
@@ -313,7 +402,7 @@ export default class OkfPlugin extends Plugin {
       .filter(
         (f) =>
           !f.path.startsWith(configDir + "/") &&
-          !isExcluded(f.path, this.settings)
+          !isExcluded(f.path, settings)
       );
   }
 
@@ -355,6 +444,7 @@ export default class OkfPlugin extends Plugin {
   }
 
   private async onFileChanged(file: TFile) {
+    if (this.unloaded || !this.apiV1) return;
     if (!this.isConcept(file)) return;
 
     if (this.settings.fixOnSave && !isReserved(file.path)) {
@@ -424,6 +514,7 @@ export default class OkfPlugin extends Plugin {
    * With no active note, fall back to a full vault scan + report.
    */
   async onStatusClick() {
+    if (!this.apiV1 || this.unloaded) return;
     const file = this.app.workspace.getActiveFile();
     if (!file || file.extension !== "md" || isReserved(file.path)) {
       await this.scanVault(true, false);
@@ -444,15 +535,10 @@ export default class OkfPlugin extends Plugin {
     await this.fixFile(file, false);
 
     content = await this.app.vault.read(file);
-    const postIssues = validateContent(
-      file.path,
-      content,
-      this.isRoot(file),
-      this.settings
-    );
-    this.updateStatus(postIssues, content);
+    const postIssues = (await this.controller!.createPass().evaluate(file.path, content)).issues;
+    await this.validateActive(file, true);
 
-    const remainingErrors = postIssues.filter((i) => i.severity === "error");
+    const remainingErrors = postIssues.filter((i) => i.severity === "error" && !i.providerId);
     if (remainingErrors.length > 0) {
       // Something the fixer couldn't resolve automatically.
       this.promptForRequiredFields(file, remainingErrors);
@@ -461,7 +547,7 @@ export default class OkfPlugin extends Plugin {
       // set the real value rather than leaving the default.
       this.promptForRequiredFields(file, preIssues.filter((i) => i.severity === "error"));
     } else {
-      new Notice("OKF: note is conformant ✅");
+      new Notice(postIssues.some((i) => i.providerId) ? "OKF core checks passed; extension findings remain in the report." : "OKF: core checks passed ✅");
     }
   }
 
@@ -471,29 +557,41 @@ export default class OkfPlugin extends Plugin {
   }
 
   async validateActive(file: TFile, openReport: boolean) {
-    const content = await this.app.vault.read(file);
-    const issues = validateContent(
-      file.path,
-      content,
-      this.isRoot(file),
-      this.settings
-    );
-    // A gap belongs to the folder rather than to the index describing it, so a
-    // scan finds it in a pass of its own. Repeated here, or the note you have
-    // open is the one file the plugin under-reports: the same `index.md` would
-    // carry gaps in the list below that its own verdict had dropped.
-    issues.push(...(await this.indexGapsForActive(file)));
-    this.updateStatus(issues, content);
-    this.setActiveResult({ path: file.path, issues });
-    if (openReport) {
-      this.renderResults(issues.length ? [{ path: file.path, issues }] : [], 1);
-      void this.activateView();
-      if (!issues.length) new Notice("OKF: active note is conformant ✅");
+    if (openReport) this.revealActivePath = file.path;
+    else if (this.revealActivePath !== file.path) this.revealActivePath = undefined;
+    this.activeAbort?.abort();
+    const token = ++this.activeSequence;
+    this.setActiveResult(null);
+    if (!this.apiV1 || this.unloaded) return;
+    if (!this.isConcept(file) || file.path.startsWith(this.app.vault.configDir + "/")) return;
+    const abort = this.activeAbort = new AbortController(), pass = this.controller!.createPass(abort.signal);
+    const current = () => !this.unloaded && !abort.signal.aborted && token === this.activeSequence && pass.isCurrent() &&
+      this.app.workspace.getActiveFile()?.path === file.path;
+    const work = this.activeWork = { path: file.path, current };
+    try {
+      const content = await this.app.vault.read(file);
+      if (!current()) return;
+      const result = await pass.evaluate(file.path, content);
+      result.issues.push(...(await this.indexGapsForActive(file, pass.settings)));
+      if (!current()) return;
+      this.updateStatus(result.issues, content, result.conformance, result.extensions.complete);
+      this.setActiveResult({ path: file.path, issues: result.issues, conformance: result.conformance,
+        extensionsComplete: result.extensions.complete });
+      if (this.revealActivePath === file.path) { this.revealActivePath = undefined; await this.activateView(); }
+    } catch (error) {
+      if (!current()) return;
+      const issues: OkfIssue[] = [{ severity: "warning", rule: "scan/read", message: `Validation incomplete: ${String(error)}` }];
+      this.updateStatus(issues, undefined, "unknown", false);
+      this.setActiveResult({ path: file.path, issues, conformance: "unknown", extensionsComplete: false });
+      if (this.revealActivePath === file.path) { this.revealActivePath = undefined; await this.activateView(); }
+    } finally {
+      if (this.activeWork === work) this.activeWork = undefined;
     }
   }
 
-  private updateStatus(issues: OkfIssue[], content?: string) {
-    const errs = issues.filter((i) => i.severity === "error").length;
+  private updateStatus(issues: OkfIssue[], content?: string, conformance: Conformance = "unknown", extensionsComplete = true) {
+    const errs = issues.filter((i) => i.severity === "error" && !i.providerId && !i.rule.startsWith("portent/")).length;
+    const extensionErrors = issues.filter((i) => i.severity === "error" && i.providerId).length;
     const warns = issues.filter((i) => i.severity === "warning").length;
     // The derived trust tier (§5.3) describes the note rather than faulting it,
     // so it rides in the tooltip instead of the issue list. The report pane only
@@ -507,7 +605,10 @@ export default class OkfPlugin extends Plugin {
       "okf-statusbar-bad",
       "okf-statusbar-warn"
     );
-    if (errs > 0) {
+    if (conformance === "unknown") {
+      this.statusEl.setText("OKF ? incomplete");
+      this.statusEl.addClass("okf-statusbar-warn");
+    } else if (errs > 0) {
       this.statusEl.setText(`OKF ✖ ${errs}`);
       this.statusEl.addClass("okf-statusbar-bad");
     } else if (warns > 0) {
@@ -517,24 +618,26 @@ export default class OkfPlugin extends Plugin {
       this.statusEl.setText("OKF ✓");
       this.statusEl.addClass("okf-statusbar-ok");
     }
+    if (extensionErrors) this.statusEl.setText(this.statusEl.getText() + ` · Ext ✖ ${extensionErrors}`);
+    if (!extensionsComplete) this.statusEl.setText(this.statusEl.getText() + " · Ext incomplete");
     // Tooltip carries the detail so we don't need a Notice for routine checks.
     if (issues.length === 0) {
-      const lines = ["Active note conforms to OKF v0.2"];
+      const lines = [conformance === "conformant" ? "Active note conforms to OKF v0.2" : "Core conformance unknown: incomplete/reduced checks"];
       if (tier) lines.push(`Trust tier: ${tier}`);
       lines.push("");
-      lines.push("Click to scan the whole vault");
+      lines.push("Click to fix core fields and open the report");
       this.statusEl.setAttribute("aria-label", lines.join("\n"));
     } else {
-      const lines = issues
+      const lines = [`Core OKF: ${conformance}; extensions: ${extensionsComplete ? "complete" : "incomplete"}`, ...issues
         .slice(0, 8)
-        .map((i) => `${i.severity === "error" ? "✖" : "⚠"} ${i.rule} ${i.message}`);
+        .map((i) => `${i.severity === "error" ? "✖" : "⚠"} [${i.providerName ?? "OKF"}] ${i.rule} ${i.message}`)];
       if (issues.length > 8) lines.push(`…and ${issues.length - 8} more`);
       if (tier) {
         lines.push("");
         lines.push(`Trust tier: ${tier}`);
       }
       lines.push("");
-      lines.push("Click to scan the whole vault");
+      lines.push("Click to fix core fields and open the report");
       this.statusEl.setAttribute("aria-label", lines.join("\n"));
     }
   }
@@ -542,94 +645,67 @@ export default class OkfPlugin extends Plugin {
   /** Vault-wide summary tooltip on the status bar (set after a full scan). */
   private refreshStatusTooltip() {
     if (!this.lastSummary) return;
-    const { scanned, errFiles, warnFiles } = this.lastSummary;
-    const ok = scanned - errFiles - warnFiles;
+    const s = this.lastSummary;
     this.statusEl.setAttribute(
       "aria-label",
-      `OKF v0.2 — ${scanned} notes scanned\n✓ ${ok} conformant\n✖ ${errFiles} with errors\n⚠ ${warnFiles} warnings only\n\nClick to open the report`
+      `Core OKF: ${s.conformance} (${s.checkCoverage} checks)\n${s.counts.files.validated}/${s.counts.files.candidates} notes validated; ${s.coreErrorFiles} with core errors\n${s.extensionErrorFiles} with extension errors; extensions ${s.extensions.complete ? "complete" : "incomplete"}\n${s.counts.files.unreadable} unreadable, ${s.counts.files.unprocessed} unprocessed\n\nClick to open the report`
     );
   }
 
   async scanVault(reveal = true, silent = false) {
+    if (this.unloaded || !this.apiV1) return;
     if (this.busy) {
       if (!silent) new Notice("OKF: a scan/fix is already running…");
       return;
     }
-    this.busy = true;
+    this.busy = true; this.operationRevision++;
+    const abort = this.scanAbort = new AbortController(), pass = this.controller!.createPass(abort.signal);
+    const current = () => !this.unloaded && !abort.signal.aborted && pass.isCurrent();
     try {
-      const files = this.candidateFiles();
-      const results: FileResult[] = [];
-      await this.processQueue(
-        files,
-        async (f) => {
-          const content = await this.app.vault.read(f);
-          const issues = validateContent(
-            f.path,
-            content,
-            this.isRoot(f),
-            this.settings
-          );
-          if (issues.length) results.push({ path: f.path, issues });
-        },
-        silent ? undefined : "OKF: scanning"
-      );
-      // An index gap belongs to a folder rather than to any note in it, so it
-      // takes a second pass over the folder tree. Findings are merged onto the
-      // index's own path, so a listing that is both malformed and incomplete is
-      // one entry in the report instead of two.
-      if (this.settings.reportIndexGaps) {
-        const byPath = new Map(results.map((r) => [r.path, r]));
-        await this.processQueue(
-          this.indexableFolders(),
-          async (folder) => {
-            const gaps = await this.indexGapsForFolder(folder);
-            if (!gaps) return;
-            const at = byPath.get(gaps.path);
-            if (at) at.issues.push(...gaps.issues);
-            else {
-              byPath.set(gaps.path, gaps);
-              results.push(gaps);
-            }
-          },
-          silent ? undefined : "OKF: checking indexes"
-        );
-      }
-      results.sort((a, b) => a.path.localeCompare(b.path));
-      this.renderResults(results, files.length);
-      // The scan just re-validated the active note along with everything else,
-      // index gaps included, so its verdict comes from the same pass. Left
-      // alone, the pane's active section would sit there contradicting the
-      // list below it after a Fix all.
+      if (!silent) this.getReportView()?.showProgress("OKF: scanning");
+      const scan = await collectVault(this.scanHost(), pass.settings, {
+        pluginVersion: this.manifest.version, now: pass.now, signal: abort.signal, evaluateNote: pass.evaluate,
+        guard: () => { if (this.unloaded) throw new Error("OKF unloaded"); },
+        onProgress: (done, total) => { if (!silent && current()) this.getReportView()?.setProgress(total ? done / total : 1, "OKF: scanning"); },
+      });
+      if (!current()) return;
+      const results = scanResults(scan), summary = summarizeScan(scan);
+      this.renderResults(results, scan.counts.files.candidates, summary);
       const active = this.app.workspace.getActiveFile();
-      if (active && files.some((f) => f.path === active.path)) {
-        const hit = results.find((r) => r.path === active.path);
-        this.setActiveResult({ path: active.path, issues: hit ? hit.issues : [] });
-      }
-      const errFiles = results.filter((r) =>
-        r.issues.some((i) => i.severity === "error")
-      ).length;
-      const warnFiles = results.length - errFiles;
-      this.lastSummary = { scanned: files.length, errFiles, warnFiles };
+      // Re-read the active file rather than publishing a potentially old scan
+      // read over a newer save/tab validation that completed in the meantime.
+      if (active?.extension === "md") await this.refreshActive(active);
+      if (!current()) return;
+      this.lastSummary = summary;
       this.refreshStatusTooltip();
       // Only steal focus / open the panel on an explicit, non-silent run.
       if (reveal && !silent) await this.activateView();
       // Notice only when the user explicitly asked (non-silent).
       if (!silent) {
         new Notice(
-          `OKF: scanned ${files.length} notes — ${errFiles} with errors, ${warnFiles} with warnings only.`
+          `OKF: ${scan.counts.files.validated}/${scan.counts.files.candidates} notes validated — core ${scan.conformance}; ${summary.extensionErrorFiles} with extension errors${scan.extensions.complete ? "" : "; extension checks incomplete"}.`
         );
       }
+    } catch (error) {
+      if (current()) {
+        this.lastSummary = null; this.pendingResults = null; this.getReportView()?.invalidate();
+        this.statusEl.setText("OKF ? scan incomplete");
+        console.error("OKF scan failed", error);
+        if (!silent) new Notice(`OKF: scan incomplete — ${String(error)}`);
+      }
     } finally {
-      this.busy = false;
+      this.getReportView()?.hideProgress();
+      this.busy = false; this.scanAbort = undefined;
+      if (this.refreshPending) this.requestValidationRefresh(this.refreshVault);
     }
   }
 
-  private renderResults(results: FileResult[], scanned: number) {
+  private renderResults(results: FileResult[], scanned: number, summary?: ScanSummary) {
     const leaf = this.app.workspace.getLeavesOfType(OKF_VIEW_TYPE)[0];
     if (leaf && leaf.view instanceof OkfReportView) {
-      leaf.view.setResults(results, scanned);
+      leaf.view.setResults(results, scanned, summary);
     } else {
-      this.pendingResults = { results, scanned };
+      this.pendingResults = { results, scanned, summary };
     }
   }
 
@@ -639,12 +715,13 @@ export default class OkfPlugin extends Plugin {
    * results: those count the vault, and one note's verdict arriving between
    * scans would have the summary chips reporting a vault nobody scanned.
    */
-  private setActiveResult(r: { path: string; issues: OkfIssue[] } | null) {
+  private setActiveResult(r: typeof this.activeResult) {
     this.activeResult = r;
-    this.getReportView()?.setActive(r?.path ?? null, r?.issues ?? []);
+    this.getReportView()?.setActive(r?.path ?? null, r?.issues ?? [], r?.conformance ?? "unknown", r?.extensionsComplete ?? false);
   }
 
   async fixFile(file: TFile, notify: boolean): Promise<number> {
+    if (this.unloaded || !this.apiV1) return 0;
     const content = await this.app.vault.read(file);
     const issues = validateContent(
       file.path,
@@ -665,12 +742,15 @@ export default class OkfPlugin extends Plugin {
       this.settings.autoMigrateOnFix
     );
     if (applied.length > 0 && fixed !== content) {
+      if (this.unloaded) return 0;
       this.selfWrites.add(file.path);
       await this.app.vault.modify(file, fixed);
+      if (!this.busy && this.app.workspace.getActiveFile()?.path === file.path) await this.validateActive(file, notify);
       if (notify)
         new Notice(`OKF fixed ${file.basename}: ${applied.join(", ")}`);
       return applied.length;
     }
+    if (!this.busy && this.app.workspace.getActiveFile()?.path === file.path) await this.validateActive(file, notify);
     if (notify) new Notice("OKF: nothing auto-fixable on this note.");
     return 0;
   }
@@ -681,6 +761,7 @@ export default class OkfPlugin extends Plugin {
    * that ordinary save-time auto-fix deliberately skips.
    */
   async migrateActive(file: TFile) {
+    if (this.unloaded || !this.apiV1) return;
     const content = await this.app.vault.read(file);
     const issues = validateContent(
       file.path,
@@ -702,6 +783,7 @@ export default class OkfPlugin extends Plugin {
     } else {
       new Notice("OKF: nothing to migrate — note already uses v0.2 fields.");
     }
+    await this.validateActive(file, false);
   }
 
   /**
@@ -709,6 +791,7 @@ export default class OkfPlugin extends Plugin {
    * using Obsidian's safe frontmatter editor. Empty values are skipped.
    */
   async setFrontmatterFields(file: TFile, fields: Record<string, string>) {
+    if (this.unloaded || !this.apiV1) return;
     this.selfWrites.add(file.path);
     await this.app.fileManager.processFrontMatter(
       file,
@@ -720,22 +803,16 @@ export default class OkfPlugin extends Plugin {
       }
     );
     // Refresh status after the edit.
-    const content = await this.app.vault.read(file);
-    const issues = validateContent(
-      file.path,
-      content,
-      this.isRoot(file),
-      this.settings
-    );
-    this.updateStatus(issues, content);
+    await this.validateActive(file, false);
   }
 
   async fixAll() {
+    if (this.unloaded || !this.apiV1) return;
     if (this.busy) {
       new Notice("OKF: a scan/fix is already running…");
       return;
     }
-    this.busy = true;
+    this.busy = true; this.operationRevision++;
     let changed = 0;
     try {
       const files = this.candidateFiles().filter((f) => !isReserved(f.path));
@@ -749,6 +826,7 @@ export default class OkfPlugin extends Plugin {
       );
     } finally {
       this.busy = false;
+      if (this.refreshPending) this.requestValidationRefresh(this.refreshVault);
     }
     new Notice(`OKF: auto-fixed ${changed} note(s).`);
     await this.scanVault();
@@ -798,7 +876,8 @@ export default class OkfPlugin extends Plugin {
    */
   private async indexEntriesFor(
     folder: TFolder,
-    fillMissingChildren: boolean
+    fillMissingChildren: boolean,
+    settings = this.settings
   ): Promise<IndexEntry[]> {
     const children = folder.children;
     // Notes are grouped by their `type`, so the listing says what the directory
@@ -847,7 +926,7 @@ export default class OkfPlugin extends Plugin {
         // A subdirectory's document is its own index.md, so that is what the
         // entry links at. A bare `folder/` link resolves to a note that doesn't
         // exist, and clicking it creates a stray file in the vault.
-        if (!this.folderIsIndexable(child)) continue;
+        if (!this.folderIsIndexable(child, settings)) continue;
         // Write that index before linking at it. Marking only ever walks up
         // from a change, so a subfolder nothing has touched is never queued on
         // its own; without this, a listing could point at an index nothing
@@ -874,7 +953,7 @@ export default class OkfPlugin extends Plugin {
           title: child.name,
           desc:
             childIndex instanceof TFile
-              ? await this.folderDescription(childIndex)
+              ? await this.folderDescription(childIndex, settings)
               : "",
         });
       }
@@ -972,7 +1051,8 @@ export default class OkfPlugin extends Plugin {
    * reads as "this should be here" in the case where it isn't.
    */
   private async indexGapsForFolder(
-    folder: TFolder
+    folder: TFolder,
+    settings = this.settings
   ): Promise<FileResult | null> {
     const root = folder.path === "/" || folder.path === "";
     const indexPath = root ? "index.md" : `${folder.path}/index.md`;
@@ -993,7 +1073,7 @@ export default class OkfPlugin extends Plugin {
     }
     // Nothing is filled in on the way past: a check that writes an index in
     // order to decide whether an index is missing has answered its own question.
-    const entries = await this.indexEntriesFor(folder, false);
+    const entries = await this.indexEntriesFor(folder, false, settings);
     if (entries.length === 0) return null;
     const base = root ? "" : `${folder.path}/`;
     const unlisted = unlistedEntries(
@@ -1023,12 +1103,12 @@ export default class OkfPlugin extends Plugin {
    * scan would never reach — excluded, or under Obsidian's config dir — doesn't
    * acquire findings merely by being open.
    */
-  private async indexGapsForActive(file: TFile): Promise<OkfIssue[]> {
-    if (!this.settings.reportIndexGaps) return [];
+  private async indexGapsForActive(file: TFile, settings = this.settings): Promise<OkfIssue[]> {
+    if (!settings.reportIndexGaps) return [];
     if (isReserved(file.path) !== "index") return [];
     const folder = file.parent;
-    if (!folder || !this.folderIsIndexable(folder)) return [];
-    const gaps = await this.indexGapsForFolder(folder);
+    if (!folder || !this.folderIsIndexable(folder, settings)) return [];
+    const gaps = await this.indexGapsForFolder(folder, settings);
     return gaps ? gaps.issues : [];
   }
 
@@ -1038,8 +1118,8 @@ export default class OkfPlugin extends Plugin {
    * frontmatter (§8), so a body section is the only place a folder can say what
    * it is for.
    */
-  private async folderDescription(index: TFile): Promise<string> {
-    const section = this.settings.indexSubdirDescSection.trim();
+  private async folderDescription(index: TFile, settings = this.settings): Promise<string> {
+    const section = settings.indexSubdirDescSection.trim();
     if (!section) return "";
     return sectionSummary(await this.app.vault.cachedRead(index), section);
   }
@@ -1051,12 +1131,12 @@ export default class OkfPlugin extends Plugin {
    * can't be reached — except the ones that aren't part of the bundle at all:
    * Obsidian's own config folder and anything the user excluded.
    */
-  private folderIsIndexable(folder: TFolder): boolean {
+  private folderIsIndexable(folder: TFolder, settings = this.settings): boolean {
     const path = folder.path;
     if (path === "/" || path === "") return true;
     const config = this.app.vault.configDir;
     if (path === config || path.startsWith(config + "/")) return false;
-    return !isExcluded(path, this.settings);
+    return !isExcluded(path, settings);
   }
 
   /**
@@ -1083,10 +1163,10 @@ export default class OkfPlugin extends Plugin {
    * no notes — empty, or nothing but subfolders — still gets an index, so there
    * is nothing to find it by except the tree itself.
    */
-  private indexableFolders(): TFolder[] {
+  private indexableFolders(settings = this.settings): TFolder[] {
     const list: TFolder[] = [];
     const walk = (folder: TFolder) => {
-      if (!this.folderIsIndexable(folder)) return;
+      if (!this.folderIsIndexable(folder, settings)) return;
       list.push(folder);
       for (const child of folder.children) {
         if (child instanceof TFolder) walk(child);
@@ -1097,11 +1177,12 @@ export default class OkfPlugin extends Plugin {
   }
 
   async generateAllIndexes(silent = false) {
+    if (this.unloaded || !this.apiV1) return;
     if (this.busy) {
       if (!silent) new Notice("OKF: a scan/fix is already running…");
       return;
     }
-    this.busy = true;
+    this.busy = true; this.operationRevision++;
     try {
       const list = this.indexableFolders();
       // Deepest folders first: a parent links to — and quotes the description
@@ -1126,6 +1207,7 @@ export default class OkfPlugin extends Plugin {
       }
     } finally {
       this.busy = false;
+      if (this.refreshPending) this.requestValidationRefresh(this.refreshVault);
     }
   }
 
@@ -1185,7 +1267,8 @@ export default class OkfPlugin extends Plugin {
       if (this.pendingResults && leaf.view instanceof OkfReportView) {
         leaf.view.setResults(
           this.pendingResults.results,
-          this.pendingResults.scanned
+          this.pendingResults.scanned,
+          this.pendingResults.summary
         );
         this.pendingResults = null;
       }

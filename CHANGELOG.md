@@ -4,6 +4,23 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- A registration-focused validation API for companion plugins, with copied
+  context, source-labelled findings, lifecycle-aware attachment, cancellation,
+  asynchronous deadlines and provider-failure isolation. Extension errors do
+  not change core OKF conformance and cannot provide auto-fixes.
+- A plugin-author guide and compilable owner-policy example, Node regressions
+  and a separate disposable Obsidian test companion. The Windows Obsidian
+  1.14.5 E2E suite passes 18 checks; mobile runtime is untested.
+
+### Changed
+- Active-note, save, vault and post-fix checks share the extension pipeline.
+  Vault reports retain unreadable/unprocessed coverage and count folder
+  findings separately, rather than silently presenting partial work as clean.
+- CI runs tests, type-checks and verifies the tracked bundle matches the build.
+
 ## [0.6.1] - 2026-08-14
 
 ### Fixed
