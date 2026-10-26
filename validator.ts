@@ -1,5 +1,5 @@
 // validator.ts — OKF v0.2 conformance engine
-// Spec: GoogleCloudPlatform/knowledge-catalog/okf/SPEC.md (v0.2)
+// Spec: GoogleCloudPlatform/open-knowledge-format/SPEC.md (v0.2)
 // Targets v0.2 with v0.1 back-compat: a legacy `timestamp` is read as a
 // fallback for `generated.at`, and a legacy `# Citations` body list is
 // recognized as a fallback for `sources` (SPEC §13).
