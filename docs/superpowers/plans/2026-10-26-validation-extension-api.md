@@ -16,8 +16,9 @@ with 75 passing Node tests, type-check and a matching rebuilt bundle. The Task
 is gated on the human first-open vault-trust decision; no runtime RED/GREEN or
 mobile acceptance is claimed. Task 4 documentation/CI is implemented; branch
 review found receiver, sparse-output and queued-refresh defects; all were fixed
-with RED/GREEN regressions, along with safe fixture reuse. Draft-PR delivery
-follows. Keep the runtime gate open.
+with RED/GREEN regressions, along with safe fixture reuse. Draft PR #26 is
+updated; GitHub CI passed its tests, type-check, build and tracked-bundle check.
+Keep the runtime gate open.
 
 ## Global Constraints
 
@@ -82,4 +83,4 @@ follows. Keep the runtime gate open.
 - [x] Document a copyable registration/cleanup example, context, source ownership, async limits, private discovery and no sandbox promises.
 - [x] Add Node tests to CI and record real desktop evidence with any untested mobile gate explicit.
 - [x] Obtain one fresh whole-branch review; fix important findings with RED/GREEN regression tests and a green full suite.
-- [ ] Verify clean intended diff and rebuilt tracked bundle; update PR #26 to extension-focused implementation/evidence. Do not merge or publish a release.
+- [x] Verify clean intended diff and rebuilt tracked bundle; update PR #26 to extension-focused implementation/evidence. Do not merge or publish a release.
