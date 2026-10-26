@@ -8,6 +8,8 @@ Thanks for your interest in improving OKF Enforcer!
 git clone https://github.com/MartinForReal/okf-enforcer.git
 cd okf-enforcer
 npm install
+npm test
+npx tsc --noEmit
 npm run build
 ```
 
@@ -17,6 +19,8 @@ into `<your-vault>/.obsidian/plugins/okf-enforcer/` and reload Obsidian. The
 
 ## Before opening a pull request
 
+- Run `npm test` — these are Node tests with Obsidian boundary doubles, not
+  proof of actual YAML parsing, desktop UI behavior or mobile acceptance.
 - Run `npx tsc --noEmit` — the build must type-check cleanly.
 - Run `npm run build` — `main.js` must build without errors.
 - **Commit the rebuilt `main.js`.** It is a tracked artifact, not a build output
@@ -27,6 +31,19 @@ into `<your-vault>/.obsidian/plugins/okf-enforcer/` and reload Obsidian. The
 - Keep changes focused; describe what and why in the PR.
 - Follow the existing style: build DOM with `createEl`/`createDiv` (never `innerHTML`),
   put styling in `styles.css`, and register events via `registerEvent` so they unload.
+
+## Validation extensions
+
+See the [plugin-author guide](docs/plugin-api.md) and the compilable
+[owner-policy example](examples/owner-validator/main.ts). Keep the public API
+focused on registering validation; internal collection/report helpers are not
+an exported scan SDK. Extension findings must remain attributed, non-fixable,
+and separate from core conformance.
+
+Follow [the disposable Obsidian E2E procedure](tests/e2e/README.md) for runtime
+changes. Never use a personal vault/profile, bypass a vault-trust prompt, or
+equate a green source suite with runtime acceptance. Receipts and screenshots
+belong outside the repository; report actual desktop and mobile gates honestly.
 
 ## Reporting bugs
 
