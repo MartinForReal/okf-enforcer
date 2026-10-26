@@ -202,6 +202,44 @@ test("public results omit private fixes while the shared UI collector retains th
   assert.equal(scanResults(scan)[0].issues.length, 1);
 });
 
+test("public scan metadata is deeply independent of the collected scan", async () => {
+  const h = harness();
+  h.settings.warnMissingFields = ["title"];
+  h.settings.checkAttestedComputation = false;
+  const scan = await collectVault(h.host, snapshotSettings(h.settings), { pluginVersion: "0.6.1", now: NOW, guard() {} });
+  const report = toPublicVaultReport(scan);
+  Reflect.set(report.enabledChecks.warnMissingFields, 0, "changed");
+  Reflect.set(report.disabledErrorChecks, 0, "changed");
+  Reflect.set(report.enabledChecks.portent.types, 0, "changed");
+  Reflect.set(report.enabledChecks.portent.statuses, 0, "changed");
+  Reflect.set(report.enabledChecks.portent.checks, 0, "changed");
+  Reflect.set(report.enabledChecks.portent.fields, "status", "changed");
+  Reflect.set(report.scope.excludeFolders, 0, "changed");
+  Reflect.set(report.counts.files, "validated", 99);
+  Reflect.set(report.counts.folders, "validated", 99);
+  Reflect.set(report.extensions, "complete", false);
+  assert.deepEqual(scan.enabledChecks.warnMissingFields, ["title"]);
+  assert.deepEqual(scan.disabledErrorChecks, ["checkAttestedComputation"]);
+  assert.equal(scan.enabledChecks.portent.types[0], "Project");
+  assert.equal(scan.enabledChecks.portent.statuses[0], "captured");
+  assert.equal(scan.enabledChecks.portent.checks[0], "type");
+  assert.equal(scan.enabledChecks.portent.fields.status, "status");
+  assert.deepEqual(scan.scope.excludeFolders, ["Templates"]);
+  assert.equal(scan.counts.files.validated, 1);
+  assert.equal(scan.counts.folders.validated, 0);
+  assert.equal(scan.extensions.complete, true);
+});
+
+test("scan summary counts do not alias the collected outcomes", async () => {
+  const h = harness();
+  const scan = await collectVault(h.host, snapshotSettings(h.settings), { pluginVersion: "0.6.1", now: NOW, guard() {} });
+  const summary = summarizeScan(scan);
+  Reflect.set(summary.counts.files, "validated", 99);
+  Reflect.set(summary.counts.folders, "validated", 99);
+  assert.deepEqual(scan.counts.files, { candidates: 1, validated: 1, unreadable: 0, unprocessed: 0 });
+  assert.deepEqual(scan.counts.folders, { candidates: 0, validated: 0, unreadable: 0, unprocessed: 0 });
+});
+
 test("malformed scan options reject with an operational code", async () => {
   const h = harness();
   for (const options of [null, [], { signal: {} }, { signal: { aborted: "yes" } }]) {

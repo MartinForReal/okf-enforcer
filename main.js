@@ -1462,7 +1462,13 @@ function apiError(code, message) {
   return Object.assign(new Error(message), { name: "OkfApiError", code });
 }
 function snapshotSettings(settings) {
-  return JSON.parse(JSON.stringify(settings));
+  return {
+    ...settings,
+    warnMissingFields: [...settings.warnMissingFields],
+    excludeFolders: [...settings.excludeFolders],
+    portentTypes: [...settings.portentTypes],
+    portentStatuses: [...settings.portentStatuses]
+  };
 }
 function reportMetadata(settings, context) {
   const disabledErrorChecks = settings.checkAttestedComputation ? [] : ["checkAttestedComputation"];
@@ -1514,7 +1520,7 @@ function conformanceFor(issues, coverage, complete = true) {
   return issues.some((issue) => issue.severity === "error" && !issue.providerId && !issue.rule.startsWith("portent/")) ? "non-conformant" : "conformant";
 }
 function validateProvidedContent(input, settings, context) {
-  if (!input || typeof input !== "object" || Array.isArray(input) || typeof input.path !== "string" || typeof input.content !== "string" || !input.path.endsWith(".md") || /^[A-Za-z]:/.test(input.path) || /[\\\x00-\x1f]/.test(input.path) || input.path.split("/").some((part) => !part || part === "." || part === "..")) {
+  if (!input || typeof input !== "object" || Array.isArray(input) || typeof input.path !== "string" || typeof input.content !== "string" || !input.path.endsWith(".md") || /^[A-Za-z]:/.test(input.path) || input.path.includes("\\") || Array.from(input.path).some((character) => character.charCodeAt(0) < 32) || input.path.split("/").some((part) => !part || part === "." || part === "..")) {
     throw apiError("invalid-request", "Expected Markdown content and a vault-relative .md path without absolute paths, backslashes or dot segments.");
   }
   const metadata = reportMetadata(settings, context);
@@ -1650,7 +1656,7 @@ var ExtensionRegistry = class {
       const finish = (result) => {
         if (done) return;
         done = true;
-        if (timer !== void 0) clearTimeout(timer);
+        if (timer !== void 0) window.clearTimeout(timer);
         signal == null ? void 0 : signal.removeEventListener("abort", cancel);
         entry.pending.delete(cancel);
         resolve(result);
@@ -1665,7 +1671,7 @@ var ExtensionRegistry = class {
         return;
       }
       signal == null ? void 0 : signal.addEventListener("abort", cancel, { once: true });
-      timer = setTimeout(() => {
+      timer = window.setTimeout(() => {
         finish(failed("timeout", `asynchronous deadline exceeded (${this.timeoutMs} ms)`));
         controller.abort();
       }, this.timeoutMs);
@@ -1790,7 +1796,7 @@ async function collectVault(host, settings, context) {
     await Promise.all(jobs.slice(start, start + batchSize).map((job) => job()));
     context.guard();
     (_b = context.onProgress) == null ? void 0 : _b.call(context, Math.min(start + batchSize, jobs.length), jobs.length);
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
   }
   context.guard();
   const fileCounts = counts(fileOutcomes), folderCounts = counts(folderOutcomes);
@@ -1828,7 +1834,22 @@ function toPublicVaultReport(scan) {
     ...value.error ? { error: { ...value.error } } : {}
   });
   return {
-    ...JSON.parse(JSON.stringify(metadata)),
+    ...metadata,
+    enabledChecks: {
+      ...metadata.enabledChecks,
+      warnMissingFields: [...metadata.enabledChecks.warnMissingFields],
+      portent: {
+        ...metadata.enabledChecks.portent,
+        types: [...metadata.enabledChecks.portent.types],
+        statuses: [...metadata.enabledChecks.portent.statuses],
+        fields: { ...metadata.enabledChecks.portent.fields },
+        checks: [...metadata.enabledChecks.portent.checks]
+      }
+    },
+    disabledErrorChecks: [...metadata.disabledErrorChecks],
+    scope: { ...metadata.scope, excludeFolders: [...metadata.scope.excludeFolders] },
+    extensions: { ...metadata.extensions },
+    counts: { files: { ...metadata.counts.files }, folders: { ...metadata.counts.folders } },
     files: files.map(outcome),
     folders: folders.map((folder) => ({ ...outcome(folder), ...folder.findingPath ? { findingPath: folder.findingPath } : {} }))
   };
@@ -1857,7 +1878,7 @@ function summarizeScan(scan) {
     status: scan.status,
     checkCoverage: scan.checkCoverage,
     conformance: scan.conformance,
-    counts: JSON.parse(JSON.stringify(scan.counts)),
+    counts: { files: { ...scan.counts.files }, folders: { ...scan.counts.folders } },
     cleanFiles,
     errorFiles,
     warningFiles: validated.length - errorFiles - cleanFiles,
@@ -3330,6 +3351,9 @@ var OkfSettingTab = class extends import_obsidian4.PluginSettingTab {
   }
   /** Imperative rendering — Obsidian < 1.13's dual-support fallback. */
   display() {
+    this.renderLegacy();
+  }
+  renderLegacy() {
     const { containerEl } = this;
     containerEl.empty();
     for (const spec of this.settingSpecs()) {
@@ -3358,7 +3382,7 @@ var OkfSettingTab = class extends import_obsidian4.PluginSettingTab {
   refresh() {
     const tab = this;
     if (typeof tab.update === "function") tab.update();
-    else this.display();
+    else this.renderLegacy();
   }
 };
 var OkfPromptModal = class extends import_obsidian4.Modal {

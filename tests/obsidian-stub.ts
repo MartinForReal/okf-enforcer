@@ -1,5 +1,8 @@
 // Node tests deliberately use JSON-flow frontmatter, a valid YAML subset.
 // This is not a YAML implementation or a substitute for real Obsidian E2E.
+// Supply the browser timer boundary without changing Node's native timers.
+if (typeof window === "undefined") globalThis.window = globalThis as unknown as Window & typeof globalThis;
+
 export function parseYaml(text: string): unknown {
   return JSON.parse(text);
 }

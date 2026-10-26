@@ -12,7 +12,12 @@ export function apiError(code: ApiErrorCode, message: string): Error & { code: A
 
 /** Settings are persisted plain JSON; copy all nested arrays, never host objects. */
 export function snapshotSettings(settings: OkfSettings): OkfSettings {
-  return JSON.parse(JSON.stringify(settings));
+  return { ...settings,
+    warnMissingFields: [...settings.warnMissingFields],
+    excludeFolders: [...settings.excludeFolders],
+    portentTypes: [...settings.portentTypes],
+    portentStatuses: [...settings.portentStatuses],
+  };
 }
 
 export function reportMetadata(settings: OkfSettings, context: EvaluationContext): ReportMetadata {
@@ -69,7 +74,7 @@ export function validateProvidedContent(input: ContentRequest, settings: OkfSett
   if (!input || typeof input !== "object" || Array.isArray(input) ||
       typeof input.path !== "string" || typeof input.content !== "string" ||
       !input.path.endsWith(".md") || /^[A-Za-z]:/.test(input.path) ||
-      /[\\\x00-\x1f]/.test(input.path) ||
+      input.path.includes("\\") || Array.from(input.path).some((character) => character.charCodeAt(0) < 0x20) ||
       input.path.split("/").some((part) => !part || part === "." || part === "..")) {
     throw apiError("invalid-request", "Expected Markdown content and a vault-relative .md path without absolute paths, backslashes or dot segments.");
   }

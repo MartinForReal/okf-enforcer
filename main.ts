@@ -1659,6 +1659,10 @@ class OkfSettingTab extends PluginSettingTab {
 
   /** Imperative rendering — Obsidian < 1.13's dual-support fallback. */
   display(): void {
+    this.renderLegacy();
+  }
+
+  private renderLegacy(): void {
     const { containerEl } = this;
     containerEl.empty();
     for (const spec of this.settingSpecs()) {
@@ -1689,7 +1693,7 @@ class OkfSettingTab extends PluginSettingTab {
   private refresh(): void {
     const tab = this as unknown as { update?: () => void };
     if (typeof tab.update === "function") tab.update();
-    else this.display();
+    else this.renderLegacy();
   }
 }
 
