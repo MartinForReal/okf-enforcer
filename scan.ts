@@ -120,7 +120,7 @@ export async function collectVault(host: ScanHost, settings: OkfSettings, contex
     await Promise.all(jobs.slice(start, start + batchSize).map((job) => job()));
     context.guard();
     context.onProgress?.(Math.min(start + batchSize, jobs.length), jobs.length);
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
   }
   context.guard();
   const fileCounts = counts(fileOutcomes), folderCounts = counts(folderOutcomes);
@@ -153,7 +153,20 @@ export function toPublicVaultReport(scan: CollectedScan): VaultReport {
     ...(value.error ? { error: { ...value.error } } : {}),
   });
   return {
-    ...JSON.parse(JSON.stringify(metadata)),
+    ...metadata,
+    enabledChecks: { ...metadata.enabledChecks,
+      warnMissingFields: [...metadata.enabledChecks.warnMissingFields],
+      portent: { ...metadata.enabledChecks.portent,
+        types: [...metadata.enabledChecks.portent.types],
+        statuses: [...metadata.enabledChecks.portent.statuses],
+        fields: { ...metadata.enabledChecks.portent.fields },
+        checks: [...metadata.enabledChecks.portent.checks],
+      },
+    },
+    disabledErrorChecks: [...metadata.disabledErrorChecks],
+    scope: { ...metadata.scope, excludeFolders: [...metadata.scope.excludeFolders] },
+    extensions: { ...metadata.extensions },
+    counts: { files: { ...metadata.counts.files }, folders: { ...metadata.counts.folders } },
     files: files.map(outcome),
     folders: folders.map((folder) => ({ ...outcome(folder), ...(folder.findingPath ? { findingPath: folder.findingPath } : {}) })),
   };
@@ -182,7 +195,7 @@ export function summarizeScan(scan: CollectedScan): ScanSummary {
     extensionErrorFiles: validated.filter((file) => file.issues.some((issue) => issue.severity === "error" && issue.providerId)).length,
     extensions: { ...scan.extensions },
     status: scan.status, checkCoverage: scan.checkCoverage, conformance: scan.conformance,
-    counts: JSON.parse(JSON.stringify(scan.counts)),
+    counts: { files: { ...scan.counts.files }, folders: { ...scan.counts.folders } },
     cleanFiles, errorFiles, warningFiles: validated.length - errorFiles - cleanFiles,
     folderFindings: scan.folders.reduce((total, folder) => total + folder.issues.length, 0),
   };

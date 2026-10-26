@@ -25,6 +25,18 @@ for (const path of ["", "/absolute.md", "C:/absolute.md", "../escape.md", "a/./b
   });
 }
 
+test("supplied paths reject every ASCII control code without rejecting printable or Unicode names", () => {
+  for (let code = 0; code < 0x20; code++) {
+    const path = `a${String.fromCharCode(code)}.md`;
+    assert.throws(() => validateProvidedContent({ path, content: note({ type: "Concept" }) }, settings(), context), { code: "invalid-request" });
+  }
+  for (const path of ["a .md", "a\u007f.md", "notes/知识 📝.md"]) {
+    const report = validateProvidedContent({ path, content: note({ type: "Concept" }) }, settings(), context);
+    assert.equal(report.conformance, "conformant");
+    assert.equal(report.scope.path, path);
+  }
+});
+
 test("invalid request values reject instead of coercing content", () => {
   for (const value of [null, [], {}, { path: "x.md", content: 7 }]) {
     assert.throws(() => validateProvidedContent(value as never, settings(), context), { code: "invalid-request" });
@@ -84,6 +96,22 @@ test("configuration snapshots and report metadata do not expose live nested arra
   const report = validateProvidedContent({ path: "x.md", content: note({ type: "Concept" }) }, captured, context);
   (report.enabledChecks.warnMissingFields as string[]).push("tags");
   assert.deepEqual(captured.warnMissingFields, []);
+});
+
+test("every settings array is copied in both directions", () => {
+  const original = { ...settings(), warnMissingFields: ["title"], excludeFolders: ["Templates"],
+    portentTypes: ["Project"], portentStatuses: ["captured"] };
+  const captured = snapshotSettings(original);
+  for (const key of ["warnMissingFields", "excludeFolders", "portentTypes", "portentStatuses"] as const) {
+    original[key].push("host change");
+    captured[key].push("snapshot change");
+    assert.equal(original[key].includes("snapshot change"), false, `${key} must not alias the host`);
+    assert.equal(captured[key].includes("host change"), false, `${key} must not follow later host changes`);
+  }
+  assert.deepEqual(captured.warnMissingFields, ["title", "snapshot change"]);
+  assert.deepEqual(captured.excludeFolders, ["Templates", "snapshot change"]);
+  assert.deepEqual(captured.portentTypes, ["Project", "snapshot change"]);
+  assert.deepEqual(captured.portentStatuses, ["captured", "snapshot change"]);
 });
 
 test("discovery returns only a shape-compatible v1 facade and tolerates unavailable internals", () => {

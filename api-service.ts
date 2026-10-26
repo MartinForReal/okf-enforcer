@@ -16,7 +16,7 @@ export interface ValidationPass {
   settings: OkfSettings;
   now: Date;
   isCurrent(): boolean;
-  evaluate(path: string, content: string): Promise<NoteEvaluation>;
+  evaluate: (path: string, content: string) => Promise<NoteEvaluation>;
 }
 
 export interface ApiHost extends ScanHost {

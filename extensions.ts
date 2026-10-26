@@ -32,7 +32,10 @@ function messageOf(error: unknown): string {
 }
 
 /** Copy/freeze structured YAML without sharing aliases or mutating prototypes. */
-function immutableData(value: unknown, seen = new WeakMap<object, unknown>()): any {
+function immutableData(value: ValidationContext["frontmatter"]): ValidationContext["frontmatter"];
+function immutableData(value: ValidationContext["coreDiagnostics"]): ValidationContext["coreDiagnostics"];
+function immutableData(value: unknown, seen?: WeakMap<object, unknown>): unknown;
+function immutableData(value: unknown, seen = new WeakMap<object, unknown>()): unknown {
   if (!value || typeof value !== "object") return value;
   if (value instanceof Date) return Number.isNaN(value.getTime()) ? "Invalid Date" : value.toISOString();
   if (seen.has(value)) return seen.get(value);
@@ -121,17 +124,17 @@ export class ExtensionRegistry {
     if (!entry.active || this.disposed || signal?.aborted) return Promise.resolve(cancelled());
     return new Promise((resolve) => {
       const controller = new AbortController(); let done = false;
-      let timer: ReturnType<typeof setTimeout> | undefined;
+      let timer: number | undefined;
       const finish = (result: ProviderResult) => {
         if (done) return; done = true;
-        if (timer !== undefined) clearTimeout(timer);
+        if (timer !== undefined) window.clearTimeout(timer);
         signal?.removeEventListener("abort", cancel); entry.pending.delete(cancel); resolve(result);
       };
       const cancel = () => { finish(cancelled()); controller.abort(); };
       entry.pending.add(cancel);
       if (signal?.aborted) { cancel(); return; }
       signal?.addEventListener("abort", cancel, { once: true });
-      timer = setTimeout(() => {
+      timer = window.setTimeout(() => {
         finish(failed("timeout", `asynchronous deadline exceeded (${this.timeoutMs} ms)`)); controller.abort();
       }, this.timeoutMs);
       const context: ValidationContext = Object.freeze({ ...template,

@@ -6,6 +6,7 @@
     "moduleResolution": "node",
     "allowJs": true,
     "noImplicitAny": false,
+    "strictBindCallApply": true,
     "strictNullChecks": true,
     "lib": ["DOM", "ES2018", "ES2019"],
     "esModuleInterop": true,
