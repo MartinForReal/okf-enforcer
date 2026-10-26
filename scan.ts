@@ -1,5 +1,7 @@
 // Internal read-only collector shared by API and UI. No presentation or writes.
 import type { OutcomeCounts, ScanOutcome, VaultReport } from "./validation-types";
+import type { NoteEvaluation } from "./api-service";
+import type { ExtensionEvaluation } from "./extensions";
 import { isExcluded, validateContent, type OkfIssue, type OkfSettings } from "./validator";
 import { apiError, conformanceFor, publicDiagnostics, reportMetadata, type EvaluationContext } from "./validation";
 
@@ -14,6 +16,7 @@ export interface ScanHost {
   folders(settings: OkfSettings): ScanFolder[];
 }
 export interface CollectedOutcome {
+  extensions?: ExtensionEvaluation;
   path: string;
   status: ScanOutcome["status"];
   issues: OkfIssue[];
@@ -25,12 +28,16 @@ export interface CollectedScan extends Omit<VaultReport, "files" | "folders"> {
   folders: CollectedOutcome[];
 }
 export interface CollectContext extends EvaluationContext {
+  evaluateNote?(path: string, content: string): Promise<NoteEvaluation>;
   guard(): void;
   signal?: AbortSignal;
   clock?: () => Date;
   onProgress?(completed: number, total: number): void;
 }
 export interface ScanSummary {
+  coreErrorFiles: number;
+  extensionErrorFiles: number;
+  extensions: VaultReport["extensions"];
   status: VaultReport["status"];
   checkCoverage: VaultReport["checkCoverage"];
   conformance: VaultReport["conformance"];
@@ -78,7 +85,11 @@ export async function collectVault(host: ScanHost, settings: OkfSettings, contex
       catch (error) { failed(outcome, error); return; }
       context.guard();
       if (context.signal?.aborted) return;
-      outcome.issues = validateContent(file.path, content, !file.path.includes("/"), settings, now);
+      if (context.evaluateNote) {
+        const result = await context.evaluateNote(file.path, content);
+        context.guard();
+        outcome.issues = result.issues; outcome.extensions = result.extensions;
+      } else outcome.issues = validateContent(file.path, content, !file.path.includes("/"), settings, now);
       outcome.status = "validated";
     }),
     ...folders.map((folder, index) => async () => {
@@ -115,10 +126,15 @@ export async function collectVault(host: ScanHost, settings: OkfSettings, contex
   const fileCounts = counts(fileOutcomes), folderCounts = counts(folderOutcomes);
   const status = context.signal?.aborted ? "cancelled"
     : fileCounts.unreadable || folderCounts.unreadable ? "partial" : "complete";
+  const assessments = fileOutcomes.flatMap((o) => o.extensions?.assessments ?? []);
+  const failedExtensions = assessments.filter((a) => a.status === "failed").length;
+  const cancelledExtensions = assessments.filter((a) => a.status === "cancelled").length;
   return {
     ...metadata,
     scope: { kind: "configured-vault", configDir, excludeFolders: [...settings.excludeFolders] },
     status,
+    extensions: { complete: !failedExtensions && !cancelledExtensions && status === "complete",
+      evaluated: assessments.length, failed: failedExtensions, cancelled: cancelledExtensions },
     conformance: conformanceFor([...fileOutcomes, ...folderOutcomes].flatMap((o) => o.issues), metadata.checkCoverage, status === "complete"),
     startedAt: now.toISOString(),
     finishedAt: (context.clock?.() ?? new Date()).toISOString(),
@@ -162,6 +178,9 @@ export function summarizeScan(scan: CollectedScan): ScanSummary {
   const errorFiles = validated.filter((file) => file.issues.some((issue) => issue.severity === "error")).length;
   const cleanFiles = validated.filter((file) => file.issues.length === 0).length;
   return {
+    coreErrorFiles: validated.filter((file) => file.issues.some((issue) => issue.severity === "error" && !issue.providerId && !issue.rule.startsWith("portent/"))).length,
+    extensionErrorFiles: validated.filter((file) => file.issues.some((issue) => issue.severity === "error" && issue.providerId)).length,
+    extensions: { ...scan.extensions },
     status: scan.status, checkCoverage: scan.checkCoverage, conformance: scan.conformance,
     counts: JSON.parse(JSON.stringify(scan.counts)),
     cleanFiles, errorFiles, warningFiles: validated.length - errorFiles - cleanFiles,

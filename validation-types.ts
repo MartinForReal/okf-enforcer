@@ -41,6 +41,7 @@ export interface ScanOutcome {
 }
 export interface FolderOutcome extends ScanOutcome { readonly findingPath?: string }
 export interface VaultReport extends ReportMetadata {
+  readonly extensions: ExtensionCoverage;
   readonly scope: { readonly kind: "configured-vault"; readonly excludeFolders: readonly string[]; readonly configDir: string };
   readonly status: "complete" | "partial" | "cancelled";
   readonly conformance: Conformance;
@@ -51,3 +52,11 @@ export interface VaultReport extends ReportMetadata {
   readonly counts: { readonly files: OutcomeCounts; readonly folders: OutcomeCounts };
 }
 export interface ScanOptions { readonly signal?: AbortSignal }
+
+/** Extension coverage is independent of the core OKF verdict/read coverage. */
+export interface ExtensionCoverage {
+  readonly complete: boolean;
+  readonly evaluated: number;
+  readonly failed: number;
+  readonly cancelled: number;
+}

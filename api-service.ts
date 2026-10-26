@@ -1,10 +1,23 @@
 // Provider-owned lifecycle. Consumers receive only the small api.ts facade.
 import type { OkfApiV1, ValidationProvider } from "./api";
 import type { ContentRequest, ScanOptions } from "./validation-types";
-import { ExtensionRegistry } from "./extensions";
+import { ExtensionRegistry, type ExtensionEvaluation } from "./extensions";
 import { collectVault, toPublicVaultReport, type ScanHost } from "./scan";
-import { OKF_VERSION, type OkfSettings } from "./validator";
-import { apiError, snapshotSettings, validateProvidedContent } from "./validation";
+import { OKF_VERSION, validateContent, type OkfSettings, type OkfIssue } from "./validator";
+import type { ReportMetadata, Conformance } from "./validation-types";
+import { apiError, snapshotSettings, validateProvidedContent, conformanceFor, reportMetadata } from "./validation";
+
+export interface NoteEvaluation extends ReportMetadata {
+  issues: OkfIssue[];
+  conformance: Conformance;
+  extensions: ExtensionEvaluation;
+}
+export interface ValidationPass {
+  settings: OkfSettings;
+  now: Date;
+  isCurrent(): boolean;
+  evaluate(path: string, content: string): Promise<NoteEvaluation>;
+}
 
 export interface ApiHost extends ScanHost {
   settings(): OkfSettings;
@@ -44,6 +57,26 @@ export class ApiController {
     this.validators.dispose();
   }
 
+  /** One pass captures configuration, time and registrations for active/scan/fix. */
+  createPass(signal?: AbortSignal): ValidationPass {
+    this.ensureAvailable();
+    const settings = snapshotSettings(this.host.settings());
+    const now = new Date(this.clock().getTime()), snapshot = this.validators.snapshot();
+    const metadata = reportMetadata(settings, { pluginVersion: this.pluginVersion, now });
+    return {
+      settings, now,
+      isCurrent: () => !this.disposed && !!this.facade && snapshot.revision === this.validators.revision,
+      evaluate: async (path, content) => {
+        this.ensureAvailable();
+        const core = validateContent(path, content, !path.includes("/"), settings, now);
+        const extensions = await this.validators.validate(path, content, core, now, snapshot, signal);
+        this.ensureAvailable();
+        return { ...metadata, issues: [...core, ...extensions.issues],
+          conformance: conformanceFor(core, metadata.checkCoverage), extensions };
+      },
+    };
+  }
+
   /** Internal engine operation, deliberately not on the public registration facade. */
   async validateContent(input: ContentRequest) {
     this.ensureAvailable();
@@ -72,10 +105,13 @@ export class ApiController {
     };
     this.scanning = true;
     try {
-      const settings = snapshotSettings(this.host.settings());
-      const scan = await collectVault(this.host, settings, {
-        pluginVersion: this.pluginVersion, now: new Date(this.clock().getTime()),
-        clock: this.clock, signal: options?.signal, guard,
+      const pass = this.createPass(options?.signal);
+      const scan = await collectVault(this.host, pass.settings, {
+        pluginVersion: this.pluginVersion, now: pass.now, evaluateNote: pass.evaluate,
+        clock: this.clock, signal: options?.signal, guard: () => {
+          guard();
+          if (!pass.isCurrent()) throw apiError("busy", "Validators changed during the scan; retry with the current registrations.");
+        },
       });
       guard();
       return toPublicVaultReport(scan);
