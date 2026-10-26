@@ -1590,7 +1590,7 @@ var ExtensionRegistry = class {
       throw apiError("invalid-provider", "A validator needs a unique non-reserved lowercase ID, display name, and validate callback.");
     }
     if (this.entries.has(provider.id)) throw apiError("duplicate-provider", `Validator ID is already registered: ${provider.id}`);
-    const entry = { id: provider.id, name: provider.name.trim(), validate: provider.validate, active: true, pending: /* @__PURE__ */ new Set() };
+    const entry = { id: provider.id, name: provider.name.trim(), validate: provider.validate.bind(provider), active: true, pending: /* @__PURE__ */ new Set() };
     this.entries.set(entry.id, entry);
     this.changed();
     return () => {
@@ -1686,7 +1686,7 @@ var ExtensionRegistry = class {
         }
         try {
           if (!Array.isArray(diagnostics)) throw new Error("expected an array of diagnostics");
-          const issues = diagnostics.map((diagnostic) => {
+          const issues = Array.from(diagnostics, (diagnostic) => {
             if (!diagnostic || typeof diagnostic.rule !== "string" || !diagnostic.rule.trim() || typeof diagnostic.message !== "string" || !diagnostic.message.trim() || diagnostic.severity !== "error" && diagnostic.severity !== "warning") {
               throw new Error("each diagnostic needs rule, message and error/warning severity");
             }
@@ -2135,6 +2135,7 @@ var OkfPlugin = class extends import_obsidian4.Plugin {
         else {
           (_a = this.activeAbort) == null ? void 0 : _a.abort();
           this.activeSequence++;
+          this.revealActivePath = void 0;
           this.setActiveResult(null);
         }
       })
@@ -2234,9 +2235,14 @@ var OkfPlugin = class extends import_obsidian4.Plugin {
       this.refreshPending = false;
       this.refreshVault = false;
       const file = this.app.workspace.getActiveFile();
-      if ((file == null ? void 0 : file.extension) === "md") void this.validateActive(file, false);
+      if ((file == null ? void 0 : file.extension) === "md") void this.refreshActive(file);
       if (scan) void this.scanVault(false, true);
     }, 40);
+  }
+  async refreshActive(file) {
+    var _a;
+    if (((_a = this.activeWork) == null ? void 0 : _a.path) === file.path && this.activeWork.current()) return;
+    await this.validateActive(file, false);
   }
   /**
    * The startup work, once the workspace has settled: bring the indexes up to
@@ -2263,6 +2269,7 @@ var OkfPlugin = class extends import_obsidian4.Plugin {
     (_a = this.activeAbort) == null ? void 0 : _a.abort();
     (_b = this.scanAbort) == null ? void 0 : _b.abort();
     this.activeSequence++;
+    this.revealActivePath = void 0;
     (_c = this.controller) == null ? void 0 : _c.dispose();
     this.app.workspace.trigger(VALIDATORS_STOPPING);
   }
@@ -2406,6 +2413,8 @@ var OkfPlugin = class extends import_obsidian4.Plugin {
   }
   async validateActive(file, openReport) {
     var _a;
+    if (openReport) this.revealActivePath = file.path;
+    else if (this.revealActivePath !== file.path) this.revealActivePath = void 0;
     (_a = this.activeAbort) == null ? void 0 : _a.abort();
     const token = ++this.activeSequence;
     this.setActiveResult(null);
@@ -2416,6 +2425,7 @@ var OkfPlugin = class extends import_obsidian4.Plugin {
       var _a2;
       return !this.unloaded && !abort.signal.aborted && token === this.activeSequence && pass.isCurrent() && ((_a2 = this.app.workspace.getActiveFile()) == null ? void 0 : _a2.path) === file.path;
     };
+    const work = this.activeWork = { path: file.path, current };
     try {
       const content = await this.app.vault.read(file);
       if (!current()) return;
@@ -2429,12 +2439,21 @@ var OkfPlugin = class extends import_obsidian4.Plugin {
         conformance: result.conformance,
         extensionsComplete: result.extensions.complete
       });
-      if (openReport) await this.activateView();
+      if (this.revealActivePath === file.path) {
+        this.revealActivePath = void 0;
+        await this.activateView();
+      }
     } catch (error) {
       if (!current()) return;
       const issues = [{ severity: "warning", rule: "scan/read", message: `Validation incomplete: ${String(error)}` }];
       this.updateStatus(issues, void 0, "unknown", false);
       this.setActiveResult({ path: file.path, issues, conformance: "unknown", extensionsComplete: false });
+      if (this.revealActivePath === file.path) {
+        this.revealActivePath = void 0;
+        await this.activateView();
+      }
+    } finally {
+      if (this.activeWork === work) this.activeWork = void 0;
     }
   }
   updateStatus(issues, content, conformance = "unknown", extensionsComplete = true) {
@@ -2527,7 +2546,7 @@ Click to open the report`
       const results = scanResults(scan), summary = summarizeScan(scan);
       this.renderResults(results, scan.counts.files.candidates, summary);
       const active = this.app.workspace.getActiveFile();
-      if ((active == null ? void 0 : active.extension) === "md") await this.validateActive(active, false);
+      if ((active == null ? void 0 : active.extension) === "md") await this.refreshActive(active);
       if (!current()) return;
       this.lastSummary = summary;
       this.refreshStatusTooltip();

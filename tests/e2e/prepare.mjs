@@ -1,6 +1,6 @@
 // Prepare only our disposable fixture. Does not launch an app or touch user vaults.
 import { build } from "esbuild";
-import { mkdtemp, mkdir, writeFile, readFile, copyFile } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, copyFile, unlink, lstat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
@@ -35,6 +35,11 @@ const fixtures = {
 for (const [relative, text] of Object.entries(fixtures)) {
   const target = path.join(vault, relative); await mkdir(path.dirname(target), { recursive: true }); await writeFile(target, text);
 }
+// Reset exactly the artifact created by our intentional missing-index control.
+// Marker/root checks above authorize only this fixture; never recursively clean it.
+const gap = path.resolve(vault, "gap"), generatedIndex = path.resolve(gap, "index.md");
+if (!generatedIndex.startsWith(vault + path.sep) || (await lstat(gap)).isSymbolicLink()) throw new Error("Unsafe fixture control path");
+try { await unlink(generatedIndex); } catch (error) { if (error.code !== "ENOENT") throw error; }
 for (const name of ["main.js", "manifest.json", "styles.css"]) await copyFile(name, path.join(provider, name));
 const settings = { warnMissingFields: [], warnTrustFields: true, checkAttestedComputation: true,
   scanOnStartup: false, fixOnSave: false, liveCheckOnSave: false, autoGenerateIndex: false,

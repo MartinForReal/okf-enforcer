@@ -10,6 +10,15 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-26-validation-extension-api-design.md`
 
+**Execution status, October 26, 2026:** Tasks 1–2 are implemented and verified
+with 75 passing Node tests, type-check and a matching rebuilt bundle. The Task
+3 companion/driver is implemented and compiles, but actual Obsidian execution
+is gated on the human first-open vault-trust decision; no runtime RED/GREEN or
+mobile acceptance is claimed. Task 4 documentation/CI is implemented; branch
+review found receiver, sparse-output and queued-refresh defects; all were fixed
+with RED/GREEN regressions, along with safe fixture reuse. Draft-PR delivery
+follows. Keep the runtime gate open.
+
 ## Global Constraints
 
 - Public API v1 focuses on `registerValidator(provider): () => void`, not a general framework or scan-query SDK.
@@ -36,11 +45,11 @@
 
 **Interfaces:** Produce `ValidationProvider`, `ValidationContext`, `ValidationDiagnostic`, registration-only `OkfApiV1`, `attachValidator(app, owner, provider)`; internal `ExtensionRegistry.register/snapshot/validate/dispose` and revision. Keep useful read-only engine methods internal to `ApiController` and move internal report DTOs out of the public contract.
 
-- [ ] Write tests for registry behavior, duplicate/reserved IDs, copied context, multiple callbacks, failure/deadline/abort, invalid results, core separation, stale disposers/facades, load order, reattach and listener cleanup.
-- [ ] Run `npm test`; observe missing extension functionality before implementation.
-- [ ] Implement the narrow contract/registry/helper, preserving the existing internal collection tests rather than exporting their query surface.
-- [ ] Run all Node tests and `npx tsc --noEmit`; expect all old internal behaviors plus new extension cases green.
-- [ ] Commit the independently testable provider mechanism.
+- [x] Write tests for registry behavior, duplicate/reserved IDs, copied context, multiple callbacks, failure/deadline/abort, invalid results, core separation, stale disposers/facades, load order, reattach and listener cleanup.
+- [x] Run `npm test`; observe missing extension functionality before implementation.
+- [x] Implement the narrow contract/registry/helper, preserving the existing internal collection tests rather than exporting their query surface.
+- [x] Run all Node tests and `npx tsc --noEmit`; expect all old internal behaviors plus new extension cases green.
+- [x] Commit the independently testable provider mechanism.
 
 ### Task 2: One validation pipeline and attributed existing UI
 
@@ -48,11 +57,11 @@
 
 **Interfaces:** `OkfPlugin.apiV1` exposes the initialized registration facade; a pass captures settings, time and provider snapshot, returns core plus attributed extension findings and coverage. Internal scans retain file/folder counters and UI fix metadata.
 
-- [ ] Write failing tests for core verdict unaffected by extension errors, scanner provider outcomes, stale registry passes and active/full/post-fix agreement.
-- [ ] Wire settings/layout publication and unload invalidation, ready/stopping events, provider-change refresh, and active-note race cancellation.
-- [ ] Invoke extensions in active validation, full scans, on-save checks and post-fix validation. Keep fix eligibility core-only.
-- [ ] Show source labels and distinct core/extension/incomplete status in existing rows and summaries, without creating a new report/plugin framework.
-- [ ] Run full tests/type-check/build and commit the pipeline integration.
+- [x] Write failing tests for core verdict unaffected by extension errors, scanner provider outcomes, stale registry passes and active/full/post-fix agreement.
+- [x] Wire settings/layout publication and unload invalidation, ready/stopping events, provider-change refresh, and active-note race cancellation.
+- [x] Invoke extensions in active validation, full scans, on-save checks and post-fix validation. Keep fix eligibility core-only.
+- [x] Show source labels and distinct core/extension/incomplete status in existing rows and summaries, without creating a new report/plugin framework.
+- [x] Run full tests/type-check/build and commit the pipeline integration.
 
 ### Task 3: Actual Obsidian extension-consumer E2E
 
@@ -70,7 +79,7 @@
 
 **Files:** Add `docs/plugin-api.md`; update README, contributing instructions, changelog, CI, and design status/evidence.
 
-- [ ] Document a copyable registration/cleanup example, context, source ownership, async limits, private discovery and no sandbox promises.
-- [ ] Add Node tests to CI and record real desktop evidence with any untested mobile gate explicit.
-- [ ] Obtain one fresh whole-branch review; fix important findings with RED/GREEN regression tests and a green full suite.
+- [x] Document a copyable registration/cleanup example, context, source ownership, async limits, private discovery and no sandbox promises.
+- [x] Add Node tests to CI and record real desktop evidence with any untested mobile gate explicit.
+- [x] Obtain one fresh whole-branch review; fix important findings with RED/GREEN regression tests and a green full suite.
 - [ ] Verify clean intended diff and rebuilt tracked bundle; update PR #26 to extension-focused implementation/evidence. Do not merge or publish a release.

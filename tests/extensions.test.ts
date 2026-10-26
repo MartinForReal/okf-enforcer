@@ -31,6 +31,24 @@ test("duplicate IDs reject; stale idempotent disposers cannot remove replacement
   replacement(); assert.equal((await run(registry)).issues.length, 0);
 });
 
+test("stateful provider methods retain their original receiver", async () => {
+  const registry = new ExtensionRegistry();
+  const stateful = { id: "fixture/stateful", name: "Stateful", rules: ["owner", "reviewer"],
+    validate() { return this.rules.map((rule) => ({ rule, message: `Missing ${rule}`, severity: "error" as const })); } };
+  registry.register(stateful);
+  const result = await run(registry);
+  assert.equal(result.complete, true);
+  assert.deepEqual(result.issues.map((i) => i.rule), ["owner", "reviewer"]);
+});
+
+test("sparse diagnostic arrays fail explicitly instead of claiming complete coverage", async () => {
+  const registry = new ExtensionRegistry(); registry.register(provider("fixture/sparse", () => new Array(1)));
+  const result = await run(registry);
+  assert.equal(result.complete, false);
+  assert.equal(result.assessments[0].reason, "invalid-result");
+  assert.equal(result.issues[0].providerFailure, true);
+});
+
 test("invalid/reserved registrations never overwrite core namespaces", () => {
   const registry = new ExtensionRegistry();
   for (const bad of [null, {}, provider(""), provider("has space"), provider("okf"), provider("okf/core"), provider("okf-enforcer/fake"), { ...provider(), name: "" }, { ...provider(), validate: false }]) {

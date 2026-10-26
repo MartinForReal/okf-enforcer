@@ -70,6 +70,8 @@ export default class OkfPlugin extends Plugin {
   private activeAbort?: AbortController;
   private scanAbort?: AbortController;
   private activeSequence = 0;
+  private activeWork?: { path: string; current(): boolean };
+  private revealActivePath?: string;
   private refreshPending = false;
   private refreshVault = false;
   private lastSummary: ScanSummary | null = null;
@@ -197,7 +199,7 @@ export default class OkfPlugin extends Plugin {
         if (file && file.extension === "md") void this.validateActive(file, false);
         // Anything else in the editor — a PDF, an image, nothing at all — has
         // no OKF verdict to show, so the pane stops claiming one.
-        else { this.activeAbort?.abort(); this.activeSequence++; this.setActiveResult(null); }
+        else { this.activeAbort?.abort(); this.activeSequence++; this.revealActivePath = undefined; this.setActiveResult(null); }
       })
     );
 
@@ -309,9 +311,16 @@ export default class OkfPlugin extends Plugin {
       if (this.unloaded || this.busy) return;
       const scan = this.refreshVault; this.refreshPending = false; this.refreshVault = false;
       const file = this.app.workspace.getActiveFile();
-      if (file?.extension === "md") void this.validateActive(file, false);
+      if (file?.extension === "md") void this.refreshActive(file);
       if (scan) void this.scanVault(false, true);
     }, 40);
+  }
+
+  private async refreshActive(file: TFile) {
+    // A registry/startup/scan refresh must not supersede an equivalent current
+    // pass, especially one the user explicitly asked to reveal.
+    if (this.activeWork?.path === file.path && this.activeWork.current()) return;
+    await this.validateActive(file, false);
   }
 
   /**
@@ -337,6 +346,7 @@ export default class OkfPlugin extends Plugin {
     this.unloaded = true;
     window.clearTimeout(this.startupTimer); window.clearTimeout(this.refreshTimer);
     this.activeAbort?.abort(); this.scanAbort?.abort(); this.activeSequence++;
+    this.revealActivePath = undefined;
     this.controller?.dispose();
     (this.app.workspace as unknown as { trigger(name: string): void }).trigger(VALIDATORS_STOPPING);
     // Intentionally do not detach the view here: Obsidian persists leaf
@@ -547,6 +557,8 @@ export default class OkfPlugin extends Plugin {
   }
 
   async validateActive(file: TFile, openReport: boolean) {
+    if (openReport) this.revealActivePath = file.path;
+    else if (this.revealActivePath !== file.path) this.revealActivePath = undefined;
     this.activeAbort?.abort();
     const token = ++this.activeSequence;
     this.setActiveResult(null);
@@ -555,6 +567,7 @@ export default class OkfPlugin extends Plugin {
     const abort = this.activeAbort = new AbortController(), pass = this.controller!.createPass(abort.signal);
     const current = () => !this.unloaded && !abort.signal.aborted && token === this.activeSequence && pass.isCurrent() &&
       this.app.workspace.getActiveFile()?.path === file.path;
+    const work = this.activeWork = { path: file.path, current };
     try {
       const content = await this.app.vault.read(file);
       if (!current()) return;
@@ -564,12 +577,15 @@ export default class OkfPlugin extends Plugin {
       this.updateStatus(result.issues, content, result.conformance, result.extensions.complete);
       this.setActiveResult({ path: file.path, issues: result.issues, conformance: result.conformance,
         extensionsComplete: result.extensions.complete });
-      if (openReport) await this.activateView();
+      if (this.revealActivePath === file.path) { this.revealActivePath = undefined; await this.activateView(); }
     } catch (error) {
       if (!current()) return;
       const issues: OkfIssue[] = [{ severity: "warning", rule: "scan/read", message: `Validation incomplete: ${String(error)}` }];
       this.updateStatus(issues, undefined, "unknown", false);
       this.setActiveResult({ path: file.path, issues, conformance: "unknown", extensionsComplete: false });
+      if (this.revealActivePath === file.path) { this.revealActivePath = undefined; await this.activateView(); }
+    } finally {
+      if (this.activeWork === work) this.activeWork = undefined;
     }
   }
 
@@ -658,7 +674,7 @@ export default class OkfPlugin extends Plugin {
       const active = this.app.workspace.getActiveFile();
       // Re-read the active file rather than publishing a potentially old scan
       // read over a newer save/tab validation that completed in the meantime.
-      if (active?.extension === "md") await this.validateActive(active, false);
+      if (active?.extension === "md") await this.refreshActive(active);
       if (!current()) return;
       this.lastSummary = summary;
       this.refreshStatusTooltip();

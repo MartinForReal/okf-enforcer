@@ -106,3 +106,16 @@ test("save-time validation and post-fix validation retain unresolved extension f
   assert.equal((h.plugin as any).activeResult.conformance, "conformant");
   h.plugin.onunload();
 });
+
+test("a queued refresh cannot cancel equivalent explicit validation or lose reveal intent", async () => {
+  const h = setup(); h.plugin.onload(); h.ready(); await sleep(60);
+  let opened = 0, calls = 0;
+  h.plugin.activateView = async () => { opened++; };
+  h.plugin.apiV1!.registerValidator({ id: "example/slow", name: "Slow", validate: async () => {
+    calls++; await sleep(120); return [{ rule: "owner", message: "Missing owner", severity: "error" }];
+  } });
+  await h.plugin.validateActive(h.app.workspace.getActiveFile(), true);
+  assert.equal((h.plugin as any).activeResult?.issues[0].providerId, "example/slow");
+  assert.equal(opened, 1); assert.equal(calls, 1);
+  h.plugin.onunload();
+});

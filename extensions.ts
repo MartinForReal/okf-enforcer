@@ -79,7 +79,7 @@ export class ExtensionRegistry {
       throw apiError("invalid-provider", "A validator needs a unique non-reserved lowercase ID, display name, and validate callback.");
     }
     if (this.entries.has(provider.id)) throw apiError("duplicate-provider", `Validator ID is already registered: ${provider.id}`);
-    const entry: Entry = { id: provider.id, name: provider.name.trim(), validate: provider.validate, active: true, pending: new Set() };
+    const entry: Entry = { id: provider.id, name: provider.name.trim(), validate: provider.validate.bind(provider), active: true, pending: new Set() };
     this.entries.set(entry.id, entry); this.changed();
     return () => {
       if (!entry.active) return;
@@ -144,7 +144,8 @@ export class ExtensionRegistry {
         if (!entry.active || this.disposed) { cancel(); return; }
         try {
           if (!Array.isArray(diagnostics)) throw new Error("expected an array of diagnostics");
-          const issues: OkfIssue[] = diagnostics.map((diagnostic: ValidationDiagnostic) => {
+          // Array.from visits holes too; sparse output is malformed, not success.
+          const issues: OkfIssue[] = Array.from(diagnostics, (diagnostic: ValidationDiagnostic) => {
             if (!diagnostic || typeof diagnostic.rule !== "string" || !diagnostic.rule.trim() ||
                 typeof diagnostic.message !== "string" || !diagnostic.message.trim() ||
                 (diagnostic.severity !== "error" && diagnostic.severity !== "warning")) {
