@@ -87,7 +87,7 @@ test("configuration snapshots and report metadata do not expose live nested arra
 });
 
 test("discovery returns only a shape-compatible v1 facade and tolerates unavailable internals", () => {
-  const api = { apiVersion: 1, pluginVersion: "0.6.1", okfVersion: "0.2", validateContent: async () => ({}), scanVault: async () => ({}) };
+  const api = { apiVersion: 1, pluginVersion: "0.6.1", okfVersion: "0.2", registerValidator: () => () => {} };
   const app = { plugins: { plugins: { "okf-enforcer": { apiV1: api } } } };
   assert.equal(getOkfApi(app), api);
   for (const unavailable of [undefined, null, {}, { plugins: {} }, { plugins: { plugins: {} } }]) assert.equal(getOkfApi(unavailable), undefined);

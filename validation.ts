@@ -1,5 +1,6 @@
 // Internal content/report adapter. Only api.ts is the consumer-facing contract.
-import type { ApiDiagnostic, ApiErrorCode, CheckCoverage, Conformance, ContentReport, ContentRequest, ReportMetadata } from "./api";
+import type { ApiErrorCode } from "./api";
+import type { ApiDiagnostic, CheckCoverage, Conformance, ContentReport, ContentRequest, ReportMetadata } from "./validation-types";
 import { OKF_VERSION, validateContent, type OkfIssue, type OkfSettings } from "./validator";
 import { PORTENT_TYPES, PORTENT_STATUSES } from "./portent";
 
@@ -52,14 +53,15 @@ export function reportMetadata(settings: OkfSettings, context: EvaluationContext
 }
 
 export function publicDiagnostics(issues: readonly OkfIssue[]): ApiDiagnostic[] {
-  return issues.map(({ rule, severity, message }) => ({
-    source: rule.startsWith("portent/") ? "portent" : "okf", rule, severity, message,
+  return issues.map(({ rule, severity, message, providerId, providerName }) => ({
+    source: providerId ?? (rule.startsWith("portent/") ? "portent" : "okf"),
+    ...(providerName ? { sourceName: providerName } : {}), rule, severity, message,
   }));
 }
 
 export function conformanceFor(issues: readonly OkfIssue[], coverage: CheckCoverage, complete = true): Conformance {
   if (!complete || coverage !== "full") return "unknown";
-  return issues.some((issue) => issue.severity === "error" && !issue.rule.startsWith("portent/"))
+  return issues.some((issue) => issue.severity === "error" && !issue.providerId && !issue.rule.startsWith("portent/"))
     ? "non-conformant" : "conformant";
 }
 

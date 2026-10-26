@@ -1,5 +1,7 @@
 // Provider-owned lifecycle. Consumers receive only the small api.ts facade.
-import type { OkfApiV1, ScanOptions } from "./api";
+import type { OkfApiV1, ValidationProvider } from "./api";
+import type { ContentRequest, ScanOptions } from "./validation-types";
+import { ExtensionRegistry } from "./extensions";
 import { collectVault, toPublicVaultReport, type ScanHost } from "./scan";
 import { OKF_VERSION, type OkfSettings } from "./validator";
 import { apiError, snapshotSettings, validateProvidedContent } from "./validation";
@@ -7,14 +9,18 @@ import { apiError, snapshotSettings, validateProvidedContent } from "./validatio
 export interface ApiHost extends ScanHost {
   settings(): OkfSettings;
   activity(): { busy: boolean; revision: number };
+  validatorsChanged?(): void;
 }
 
 export class ApiController {
   private disposed = false;
   private scanning = false;
   private facade: OkfApiV1 | undefined;
+  readonly validators: ExtensionRegistry;
 
-  constructor(private host: ApiHost, private pluginVersion: string, private clock = () => new Date()) {}
+  constructor(private host: ApiHost, private pluginVersion: string, private clock = () => new Date()) {
+    this.validators = new ExtensionRegistry(() => { if (!this.disposed) this.host.validatorsChanged?.(); });
+  }
 
   get api(): OkfApiV1 | undefined { return this.facade; }
 
@@ -25,27 +31,33 @@ export class ApiController {
       apiVersion: 1 as const,
       pluginVersion: this.pluginVersion,
       okfVersion: OKF_VERSION,
-      validateContent: async (input) => {
+      registerValidator: (provider: ValidationProvider) => {
         this.ensureAvailable();
-        const settings = snapshotSettings(this.host.settings());
-        const report = validateProvidedContent(input, settings, { pluginVersion: this.pluginVersion, now: new Date(this.clock().getTime()) });
-        this.ensureAvailable();
-        return report;
+        return this.validators.register(provider);
       },
-      scanVault: (options?: ScanOptions) => this.scan(options),
     });
   }
 
   dispose(): void {
     this.disposed = true;
     this.facade = undefined;
+    this.validators.dispose();
+  }
+
+  /** Internal engine operation, deliberately not on the public registration facade. */
+  async validateContent(input: ContentRequest) {
+    this.ensureAvailable();
+    const settings = snapshotSettings(this.host.settings());
+    const report = validateProvidedContent(input, settings, { pluginVersion: this.pluginVersion, now: new Date(this.clock().getTime()) });
+    this.ensureAvailable(); return report;
   }
 
   private ensureAvailable(): void {
     if (this.disposed || !this.facade) throw apiError("unavailable", "OKF Enforcer is unavailable or not ready. Reacquire its API.");
   }
 
-  private async scan(options?: ScanOptions) {
+  /** Internal collector operation used by Enforcer, not a consumer query SDK. */
+  async scanVault(options?: ScanOptions) {
     this.ensureAvailable();
     if (options !== undefined && (!options || typeof options !== "object" || Array.isArray(options) ||
         (options.signal !== undefined && (!options.signal || typeof options.signal.aborted !== "boolean")))) {

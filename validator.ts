@@ -23,6 +23,10 @@ export interface OkfIssue {
   rule: string;
   message: string;
   fix?: FixKind;
+  /** Host-owned attribution; extensions cannot supply core fixes. */
+  providerId?: string;
+  providerName?: string;
+  providerFailure?: boolean;
 }
 
 export type FixKind =

@@ -1,90 +1,73 @@
-// Public, host-independent API v1 contract. This module imports no provider code.
-export type Conformance = "conformant" | "non-conformant" | "unknown";
-export type CheckCoverage = "full" | "reduced";
-export type ApiErrorCode = "invalid-request" | "unavailable" | "busy";
-export interface ApiDiagnostic {
-  readonly source: "okf" | "portent";
+// Small, host-independent validation-extension contract. No provider implementation imports.
+export type ApiErrorCode = "invalid-request" | "invalid-provider" | "duplicate-provider" | "unavailable" | "busy";
+export interface ValidationDiagnostic {
   readonly rule: string;
-  readonly severity: "error" | "warning";
   readonly message: string;
+  readonly severity: "error" | "warning";
 }
-export interface EnabledChecks {
-  readonly structure: true;
-  readonly checkAttestedComputation: boolean;
-  readonly warnMissingFields: readonly string[];
-  readonly warnTrustFields: boolean;
-  readonly reportIndexGaps: boolean;
-  readonly portent: {
-    readonly enabled: boolean;
-    readonly types: readonly string[];
-    readonly statuses: readonly string[];
-    readonly fields: Readonly<Record<string, string>>;
-    readonly checks: readonly string[];
-  };
-}
-export interface ReportMetadata {
-  readonly apiVersion: 1;
-  readonly pluginVersion: string;
-  readonly okfVersion: string;
-  readonly evaluatedAt: string;
-  readonly enabledChecks: EnabledChecks;
-  readonly checkCoverage: CheckCoverage;
-  readonly disabledErrorChecks: readonly string[];
-}
-export interface ContentRequest { readonly path: string; readonly content: string }
-export interface ContentReport extends ReportMetadata {
-  readonly scope: { readonly kind: "content"; readonly path: string };
-  readonly conformance: Conformance;
-  readonly diagnostics: readonly ApiDiagnostic[];
-}
-export interface OutcomeCounts {
-  readonly candidates: number;
-  readonly validated: number;
-  readonly unreadable: number;
-  readonly unprocessed: number;
-}
-export interface ScanOutcome {
+export interface ValidationContext {
   readonly path: string;
-  readonly status: "validated" | "unreadable" | "unprocessed";
-  readonly diagnostics: readonly ApiDiagnostic[];
-  readonly error?: { readonly code: "read-failed"; readonly message: string };
+  readonly kind: "concept" | "index" | "log";
+  readonly content: string;
+  readonly body: string;
+  readonly frontmatter: Readonly<Record<string, unknown>> | null;
+  readonly frontmatterState: "valid" | "missing" | "invalid";
+  readonly evaluatedAt: string;
+  readonly coreDiagnostics: readonly ValidationDiagnostic[];
+  readonly signal: AbortSignal;
 }
-export interface FolderOutcome extends ScanOutcome { readonly findingPath?: string }
-export interface VaultReport extends ReportMetadata {
-  readonly scope: {
-    readonly kind: "configured-vault";
-    readonly excludeFolders: readonly string[];
-    readonly configDir: string;
-  };
-  readonly status: "complete" | "partial" | "cancelled";
-  readonly conformance: Conformance;
-  readonly startedAt: string;
-  readonly finishedAt: string;
-  readonly files: readonly ScanOutcome[];
-  readonly folders: readonly FolderOutcome[];
-  readonly counts: { readonly files: OutcomeCounts; readonly folders: OutcomeCounts };
+export interface ValidationProvider {
+  readonly id: string;
+  readonly name: string;
+  readonly validate: (context: ValidationContext) => readonly ValidationDiagnostic[] | Promise<readonly ValidationDiagnostic[]>;
 }
-export interface ScanOptions { readonly signal?: AbortSignal }
 export interface OkfApiV1 {
   readonly apiVersion: 1;
   readonly pluginVersion: string;
   readonly okfVersion: string;
-  validateContent(request: ContentRequest): Promise<ContentReport>;
-  scanVault(options?: ScanOptions): Promise<VaultReport>;
+  registerValidator(provider: ValidationProvider): () => void;
 }
+export const VALIDATORS_READY = "okf-enforcer:validators-ready";
+export const VALIDATORS_STOPPING = "okf-enforcer:validators-stopping";
 
-/**
- * Conventional discovery uses PRIVATE Obsidian internals. Absence is also
- * initialization/incompatibility/unsupported discovery, not proof of no install.
- * Reacquire for each action; a retained facade may reject with unavailable.
- */
+/** Conventional discovery uses PRIVATE app.plugins internals; reacquire after reload. */
 export function getOkfApi(app: unknown): OkfApiV1 | undefined {
   try {
     const api = (app as { plugins?: { plugins?: Record<string, { apiV1?: unknown }> } })
       ?.plugins?.plugins?.["okf-enforcer"]?.apiV1 as Partial<OkfApiV1> | undefined;
     if (api?.apiVersion === 1 && typeof api.pluginVersion === "string" &&
-        typeof api.okfVersion === "string" && typeof api.validateContent === "function" &&
-        typeof api.scanVault === "function") return api as OkfApiV1;
-  } catch { /* A future host may remove or reject access to these internals. */ }
+        typeof api.okfVersion === "string" && typeof api.registerValidator === "function") return api as OkfApiV1;
+  } catch { /* Host internals may be unsupported. */ }
   return undefined;
+}
+
+interface CleanupOwner { register(cleanup: () => void): void }
+interface WorkspaceEvents { on(name: string, callback: () => void): unknown; offref(ref: unknown): void }
+
+/** Attach synchronously during companion onload; owner cleanup also removes listeners. */
+export function attachValidator(app: unknown, owner: CleanupOwner, provider: ValidationProvider): () => void {
+  const workspace = (app as { workspace?: WorkspaceEvents })?.workspace;
+  if (!workspace?.on || !workspace.offref) throw new Error("Obsidian workspace events are unavailable");
+  let disposed = false, connected: OkfApiV1 | undefined, remove: (() => void) | undefined;
+  const refs: unknown[] = [];
+  const disconnect = () => { remove?.(); remove = undefined; connected = undefined; };
+  const cleanup = () => {
+    if (disposed) return; disposed = true;
+    refs.forEach((ref) => workspace.offref(ref)); refs.length = 0; disconnect();
+  };
+  const connect = () => {
+    if (disposed) return;
+    const current = getOkfApi(app);
+    if (current === connected) return;
+    disconnect();
+    if (current) { remove = current.registerValidator(provider); connected = current; }
+  };
+  owner.register(cleanup);
+  if (disposed) return cleanup;
+  refs.push(workspace.on(VALIDATORS_READY, () => {
+    try { connect(); } catch (error) { console.error(`OKF validator attachment failed (${provider.id})`, error); }
+  }));
+  refs.push(workspace.on(VALIDATORS_STOPPING, disconnect));
+  try { connect(); } catch (error) { cleanup(); throw error; }
+  return cleanup;
 }

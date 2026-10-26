@@ -22,7 +22,8 @@ function harness(files: ScanFile[] = [file("clean.md")], folders: ScanFolder[] =
     activity: () => activity, files: () => files, folders: () => folders };
   const controller = new ApiController(host, "0.6.1", () => new Date(NOW));
   controller.publish();
-  return { host, settings, activity, controller, api: controller.api! };
+  // Exercise the internal engine here; public registration is covered separately.
+  return { host, settings, activity, controller, api: controller };
 }
 
 test("a complete read-only scan accounts for clean and invalid notes", async () => {
@@ -171,7 +172,7 @@ test("facades are unavailable before publication and cannot be revived after dis
   await assert.rejects(old.validateContent({ path: "x.md", content: note() }), { code: "unavailable" });
   await assert.rejects(old.scanVault(), { code: "unavailable" });
   const fresh = new ApiController(h.host, "0.6.1"); fresh.publish();
-  assert.equal((await fresh.api!.scanVault()).status, "complete");
+  assert.equal((await fresh.scanVault()).status, "complete");
   await assert.rejects(old.scanVault(), { code: "unavailable" });
 });
 
@@ -180,6 +181,15 @@ test("unloading during a pending read rejects unavailable, not a partial success
   const h = harness([file("a.md", async () => { entered.resolve(); await hold.promise; return note(); })]);
   const pending = h.api.scanVault(); await entered.promise; h.controller.dispose();
   const rejected = assert.rejects(pending, { code: "unavailable" }); hold.resolve(); await rejected;
+});
+
+test("an old public registration facade cannot register after host disposal", () => {
+  const h = harness();
+  const old = h.controller.api!;
+  h.controller.dispose();
+  const replacement = new ApiController(h.host, "0.6.1"); replacement.publish();
+  assert.throws(() => old.registerValidator({ id: "example/rules", name: "Example", validate: () => [] }), { code: "unavailable" });
+  assert.equal(replacement.validators.snapshot().entries.length, 0);
 });
 
 test("public results omit private fixes while the shared UI collector retains them", async () => {

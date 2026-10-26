@@ -1,5 +1,5 @@
 // Internal read-only collector shared by API and UI. No presentation or writes.
-import type { OutcomeCounts, ScanOutcome, VaultReport } from "./api";
+import type { OutcomeCounts, ScanOutcome, VaultReport } from "./validation-types";
 import { isExcluded, validateContent, type OkfIssue, type OkfSettings } from "./validator";
 import { apiError, conformanceFor, publicDiagnostics, reportMetadata, type EvaluationContext } from "./validation";
 
