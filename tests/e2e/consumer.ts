@@ -35,7 +35,11 @@ export default class E2EConsumer extends Plugin {
     assert((this.app.vault.adapter as any).getBasePath() === config.vault, "Refusing a non-fixture vault");
     const manager = (this.app as any).plugins;
     const host = () => manager.plugins["okf-enforcer"] as any;
-    const modal = new Modal(this.app); modal.open();
+    const settled = () => waitFor(() => {
+      const p = host();
+      return p && !p.busy && !p.activeWork && p.refreshTimer === undefined && !p.refreshPending;
+    }, "host refreshes to settle");
+    let modal = new Modal(this.app); modal.open();
     modal.contentEl.createEl("h2", { text: "OKF extension E2E — running" });
     const results: any[] = [];
     const receipt: any = { startedAt: new Date().toISOString(), obsidianVersion: apiVersion,
@@ -70,6 +74,9 @@ export default class E2EConsumer extends Plugin {
       const before = hashes();
       await test("companion-first registration appears in the active report", async () => {
         await host().validateActive(clean, true);
+        // file-open/layout callbacks may supersede this internal pass. Observe
+        // the eventual visible verdict, not a transient null between passes.
+        await waitFor(() => host().activeResult?.path === clean.path && !host().activeWork, "active-note verdict after file-open");
         const hit = host().activeResult;
         assert(hit?.issues.some((i: any) => i.providerId === "fixture/owner"), "Companion finding missing");
         assert(hit.conformance === "conformant", "Extension error changed core conformance");
@@ -98,12 +105,69 @@ export default class E2EConsumer extends Plugin {
         assert(p.lastSummary.coreErrorFiles >= 3 && p.lastSummary.extensionErrorFiles >= 1, "Core/extension counts lost");
         assert(view.contentEl.textContent.includes("extension errors") && view.contentEl.textContent.includes("core errors"), "Separate summary labels missing");
       });
+      await test("status click preserves extension findings and does not rewrite a core-valid note", async () => {
+        await settled(); const original = await this.app.vault.read(clean);
+        await host().onStatusClick();
+        await waitFor(() => host().activeResult?.path === clean.path && !host().activeWork, "status-click verdict");
+        assert(host().activeResult.conformance === "conformant", "Status click changed core verdict");
+        assert(host().activeResult.issues.some((i: any) => i.providerId === "fixture/owner"), "Status click bypassed extension validation");
+        assert(await this.app.vault.read(clean) === original, "Core-valid status-click control rewrote the note");
+      });
+      await test("switching notes aborts a slow active check and ignores its late result", async () => {
+        await settled(); let release!: () => void, signal: AbortSignal | undefined;
+        const hold = new Promise<void>((resolve) => { release = resolve; });
+        const remove = getOkfApi(this.app)!.registerValidator({ id: "fixture/tab-switch", name: "Tab switch", validate: async (context) => {
+          if (context.path !== clean.path) return [];
+          signal ??= context.signal; await hold;
+          return [{ rule: "late", message: "Old tab must not overwrite the new note", severity: "error" }];
+        } });
+        const pending = host().validateActive(clean, false);
+        try {
+          await waitFor(() => signal, "slow active check");
+          const next = this.app.vault.getAbstractFileByPath("nested/note.md"); assert(next instanceof TFile, "Missing second tab fixture");
+          await this.app.workspace.getLeaf(false).openFile(next);
+          await waitFor(() => host().activeResult?.path === next.path && !host().activeWork, "new active note");
+          assert(signal?.aborted, "Switching tabs did not abort old active check");
+          release(); await pending;
+          assert(host().activeResult.path === next.path && !host().activeResult.issues.some((i: any) => i.providerId === "fixture/tab-switch"), "Old tab result overwrote the new note");
+        } finally {
+          release(); remove(); await this.app.workspace.getLeaf(false).openFile(clean); await host().validateActive(clean, false); await settled();
+        }
+      }, "gated active-note callback, then real workspace note switch");
+      await test("registry changes cancel a pending vault pass and refresh with only current providers", async () => {
+        await settled(); let release!: () => void, signal: AbortSignal | undefined, removeCurrent: (() => void) | undefined;
+        const hold = new Promise<void>((resolve) => { release = resolve; });
+        const api = getOkfApi(this.app)!;
+        const removeOld = api.registerValidator({ id: "fixture/old-pass", name: "Old pass", validate: async (context) => {
+          if (context.path !== "broken.md") return [];
+          signal ??= context.signal; await hold;
+          return [{ rule: "obsolete", message: "Obsolete scan finding", severity: "warning" }];
+        } });
+        const pending = host().scanVault(false, true);
+        try {
+          await waitFor(() => signal, "pending vault provider"); removeOld();
+          removeCurrent = api.registerValidator({ id: "fixture/current-pass", name: "Current pass", validate: () => [
+            { rule: "current", message: "Current registry finding", severity: "warning" },
+          ] });
+          assert(signal?.aborted, "Registry removal did not abort the vault invocation");
+          release(); await pending; await settled();
+          const view = this.app.workspace.getLeavesOfType("okf-report-view")[0]?.view as any;
+          const rows = view?.results ?? host().pendingResults?.results;
+          assert(rows?.some((r: any) => r.issues.some((i: any) => i.providerId === "fixture/current-pass")), "Current registry was not rescanned");
+          assert(!rows.some((r: any) => r.issues.some((i: any) => i.providerId === "fixture/old-pass")), "Obsolete registry findings survived");
+        } finally { release(); removeOld(); removeCurrent?.(); await settled(); }
+      }, "gated vault callback, unregister and replace during scan");
       await test("throws, invalid output and deadline do not stop other validators or fail core", async () => {
         const api = getOkfApi(this.app)!, cleanups: (() => void)[] = []; let slowSignal!: AbortSignal;
         try {
           cleanups.push(api.registerValidator({ id: "fixture/throws", name: "Throws", validate() { throw new Error("Injected provider exception"); } }));
           cleanups.push(api.registerValidator({ id: "fixture/invalid", name: "Invalid", validate: () => null as never }));
-          cleanups.push(api.registerValidator({ id: "fixture/slow", name: "Slow", validate: (context) => { slowSignal = context.signal; return new Promise(() => {}); } }));
+          cleanups.push(api.registerValidator({ id: "fixture/slow", name: "Slow", validate: (context) => {
+            // The displayed report also refreshes in the background; retain
+            // this first active invocation instead of a later note's signal.
+            if (!slowSignal && context.path === clean.path) slowSignal = context.signal;
+            return new Promise(() => {});
+          } }));
           cleanups.push(api.registerValidator({ id: "fixture/healthy", name: "Healthy", validate: () => [{ rule: "healthy", message: "Another provider ran", severity: "warning" }] }));
           let duplicate = false;
           try { api.registerValidator({ id: "fixture/healthy", name: "Duplicate", validate: () => [] }); }
@@ -115,6 +179,7 @@ export default class E2EConsumer extends Plugin {
           assert(result.issues.filter((i: any) => i.providerFailure).length === 3, "Missing attributed failures");
           assert(result.issues.some((i: any) => i.providerId === "fixture/healthy"), "Healthy validator did not run");
           assert(slowSignal.aborted, "Deadline did not abort provider");
+          receipt.deadline = { path: clean.path, aborted: slowSignal.aborted, defaultMs: 2000 };
         } finally { cleanups.forEach((fn) => fn()); }
       }, "throw, malformed array and unresolved Promise from three temporary validators");
       await test("host reload revokes old facade and reattaches companion without duplicates", async () => {
@@ -170,6 +235,8 @@ export default class E2EConsumer extends Plugin {
       await test("validation alone leaves Markdown unchanged", async () => { assert(hashes() === before, "Validation changed notes"); });
       // Intentional fixture mutations start here; not part of the no-write claim.
       await test("intentional save edit reruns the same extension policy", async () => {
+        await settled();
+        assert(host().activeResult?.issues.some((i: any) => i.providerId === "fixture/owner"), "Save control must start with an owner finding");
         const original = await this.app.vault.read(clean); host().settings.liveCheckOnSave = true;
         try {
           await this.app.vault.modify(clean, original.replace("type: Concept", "type: Concept\nowner: human:fixture"));
@@ -209,6 +276,11 @@ export default class E2EConsumer extends Plugin {
 
     function finish() {
       consumer.running = false;
+      // Reloading the actual companion closes its running modal. Display the
+      // result in a fresh modal rather than updating a detached content node.
+      modal.close(); modal = new Modal(consumer.app); modal.open();
+      receipt.resultModalVisible = modal.contentEl.isConnected;
+      if (!receipt.resultModalVisible) results.push({ name: "result modal is visible", status: "failed", error: "Result content is detached" });
       receipt.finishedAt = new Date().toISOString(); receipt.passed = results.filter((r) => r.status === "passed").length;
       receipt.failed = results.filter((r) => r.status === "failed").length; receipt.status = receipt.failed ? "failed" : "passed";
       modal.contentEl.empty(); modal.contentEl.createEl("h2", { text: `OKF extension E2E — ${receipt.status.toUpperCase()}` });

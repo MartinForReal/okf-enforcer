@@ -12,8 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   asynchronous deadlines and provider-failure isolation. Extension errors do
   not change core OKF conformance and cannot provide auto-fixes.
 - A plugin-author guide and compilable owner-policy example, Node regressions
-  and a separate disposable Obsidian test companion. Actual desktop acceptance
-  remains gated on a human vault-trust decision; mobile runtime is untested.
+  and a separate disposable Obsidian test companion. The Windows Obsidian
+  1.14.5 E2E suite passes 18 checks; mobile runtime is untested.
 
 ### Changed
 - Active-note, save, vault and post-fix checks share the extension pipeline.

@@ -16,6 +16,10 @@ Node tests use JSON-flow frontmatter only and do not establish runtime acceptanc
    Stop at that prompt: neither the harness nor automation may bypass it or
    change the app's security settings. Plugin-loader fault injection is allowed
    only after the fixture is trusted, never as an alternative to trust.
+   Launch the app visibly and keep its launcher alive if the execution host
+   otherwise closes GUI children when the launch command exits. For example,
+   in PowerShell, use `$p = Start-Process -WindowStyle Normal -PassThru` with the
+   isolated-profile arguments above, followed by `Wait-Process -Id $p.Id`.
 5. `node tests/e2e/cdp.mjs <fixtureRoot> receipt` reads the actual result. The
    Node 22+ helper verifies the target vault before any non-inventory operation.
    `run` invokes the same companion programmatically; `screenshot` captures the
@@ -39,14 +43,27 @@ partial coverage and read-only index-gap reports. Markdown hashes are compared
 and reloads the actual companion during a pending callback to check cancellation
 and discarded late findings. Receipt fault-injection labels are part of the
 evidence; these are not claims about failures in an ordinary vault.
+It also checks status-click behavior, a real note switch while a callback is
+pending, and registry replacement during a vault pass. Background refreshes
+may overlap explicit validation: wait for the observed verdict and retain the
+signal of the invocation being tested, not the last callback in another scan.
+The save control starts only after competing refreshes settle and requires an
+existing owner finding, so a background scan cannot masquerade as a save hook.
 
 For a true RED/GREEN run, preserve the pre-integration bundle in the marked
 fixture, run the companion and observe the absent API failure, then rebuild,
 update the fixture and rerun. Do not report an unexecuted harness as passing.
 
-### Current run gate (October 26, 2026)
+### Verified desktop run (October 26, 2026)
 
-Windows Obsidian 1.14.5 opened the isolated fixture, but the first-open trust
-prompt prevented plugins from loading. No trust/security setting was changed
-and no desktop extension E2E has passed yet. Source tests/type-check/build are
-separate evidence. Resume from that user decision; Android/iOS are also untested.
+Windows Obsidian **1.14.5: 18 passed, 0 failed**. The pre-integration build
+failed the real-app registration-readiness check as expected. Provider bundle
+SHA-256: `83a6e67baa4a2ede3b8dc714ae4f3cb1559a40ad9ffaaab2587d939a4ec4228b`.
+
+Evidence is preserved outside the repository: the baseline RED receipt and
+screenshot, GREEN receipts, and an actual active/vault report screenshot. CUA
+accessibility confirmed the source label and separate core/extension results;
+native pointer input was unavailable, so commands ran through the guarded
+loopback driver. No trust/security decision was automated. The fixture starts
+with nine in-scope notes; the separately labelled index-generation control
+adds a tenth. Android/iOS and actual Obsidian 1.7.2 runtime remain untested.

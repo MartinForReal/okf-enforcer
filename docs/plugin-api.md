@@ -202,9 +202,22 @@ deliberately separate from extending validation.
 - The actual desktop companion and marked-fixture driver are described in
   [`tests/e2e/README.md`](../tests/e2e/README.md). Test real YAML, visible source
   labels, core fixes, save checks, reload and pending-callback cleanup there.
-- **October 26, 2026:** installed Windows Obsidian 1.14.5 opened the disposable
-  fixture, but its first-open vault-trust prompt requires a human decision.
-  That prompt was not bypassed. No passing desktop extension E2E is claimed.
+- **October 26, 2026: 18/18 desktop checks passed in Windows Obsidian 1.14.5.**
+  The pre-integration bundle first failed API readiness in the actual app;
+  the current bundle passed after the human trust gate was resolved. No
+  trust/security action was automated. Real command invocation used the
+  fixture-scoped loopback driver; native CUA inspected the actual report.
+  Pointer automation was unavailable, so native-input coverage is not claimed.
+- The desktop receipt covers real YAML/frozen context, active/full source
+  labels, status click, stale tab and scan cancellation, provider failures and
+  the 2000 ms deadline, host/companion reload, delayed/failed settings,
+  partial coverage, unchanged Markdown during validation, and separately
+  labelled intentional save/fix/index controls. Screenshots show core OKF
+  conformance staying successful on a note with an extension error.
+- Tested provider bundle SHA-256:
+  `83a6e67baa4a2ede3b8dc714ae4f3cb1559a40ad9ffaaab2587d939a4ec4228b`.
+  Local receipts/screenshots remain outside the repository; the fixture
+  procedure prints their location and is reproducible from source.
 - Android/iOS runtime acceptance is **not tested**. The API is host-independent
   and the 1.7.2 type-check is not proof of desktop or mobile runtime acceptance.
 

@@ -10,15 +10,21 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-26-validation-extension-api-design.md`
 
-**Execution status, October 26, 2026:** Tasks 1–2 are implemented and verified
-with 75 passing Node tests, type-check and a matching rebuilt bundle. The Task
-3 companion/driver is implemented and compiles, but actual Obsidian execution
-is gated on the human first-open vault-trust decision; no runtime RED/GREEN or
-mobile acceptance is claimed. Task 4 documentation/CI is implemented; branch
-review found receiver, sparse-output and queued-refresh defects; all were fixed
-with RED/GREEN regressions, along with safe fixture reuse. Draft PR #26 is
-updated; GitHub CI passed its tests, type-check, build and tracked-bundle check.
-Keep the runtime gate open.
+**Execution status, October 26, 2026:** The implementation has 75 passing Node
+tests, type-check and a matching rebuilt bundle. The actual pre-integration
+Obsidian build failed API readiness (RED); Windows Obsidian 1.14.5 then passed
+all 18 desktop companion checks (GREEN). Receipts and real renderer screenshots
+are preserved outside the repository. Native CUA inspected the report; pointer
+input was unavailable, so real command invocation used the user-authorized
+fixture-scoped loopback driver. No trust/security action was automated.
+
+The fresh whole-branch review's receiver, sparse-output and queued-refresh
+findings were fixed with RED/GREEN regressions, along with safe fixture reuse.
+Runtime testing refined only the harness: wait for eventual UI state, track
+the tested invocation's signal, isolate the save control from background work,
+and reopen the result modal after the companion's real unload. The provider
+bundle is unchanged. PR #26 stays open as a draft for the user's review; no
+merge or release. Android/iOS and actual Obsidian 1.7.2 runtime are untested.
 
 ## Global Constraints
 
@@ -70,11 +76,11 @@ Keep the runtime gate open.
 
 **Interfaces:** A separate real companion registers rules through the same public helper; receipts identify app/build, named outcomes, fixture-only mutations and explicit fault injection.
 
-- [ ] Run the companion against the pre-integration bundle first; confirm missing registration API is a real-app RED.
-- [ ] Exercise visible active/full reports, post-fix and on-save checks, duplicate/source isolation, failing and slow providers, host reload, owner unload during callbacks and automatic reattachment.
-- [ ] Use CUA to invoke commands and inspect actual report/source labels; capture the actual renderer and preserve receipt/evidence outside the repository.
-- [ ] Verify no validation-driven note changes, and separately verify intentional core fix/index controls on disposable notes.
-- [ ] Repeat full tests/type-check/build and actual-app checks after fixes; commit fixture and tracked bundle.
+- [x] Run the companion against the pre-integration bundle first; confirm missing registration API is a real-app RED.
+- [x] Exercise visible active/full reports, post-fix and on-save checks, duplicate/source isolation, failing and slow providers, host reload, owner unload during callbacks and automatic reattachment.
+- [x] Inspect actual report/source labels with CUA and invoke the real command via the available fixture-scoped loopback driver; capture the actual renderer and preserve receipt/evidence outside the repository.
+- [x] Verify no validation-driven note changes, and separately verify intentional core fix/index controls on disposable notes.
+- [x] Repeat full tests/type-check/build and actual-app checks after fixes; commit fixture and tracked bundle.
 
 ### Task 4: Documentation, independent review, and PR delivery
 
