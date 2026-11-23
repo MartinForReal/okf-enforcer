@@ -236,10 +236,11 @@ function isReserved(path) {
   if (f === "log.md") return "log";
   return null;
 }
-function isExcluded(path, settings) {
-  return settings.excludeFolders.some(
-    (folder) => folder && (path === folder || path.startsWith(folder + "/"))
-  );
+function isExcludedFolder(path, settings, configDir) {
+  if (path === "/" || path === "") return false;
+  if (path === configDir || path.startsWith(configDir + "/")) return true;
+  const segments = path.split("/");
+  return settings.excludeFolders.some((entry) => entry && (entry.includes("/") ? path === entry || path.startsWith(entry + "/") : segments.includes(entry)));
 }
 function splitFrontmatter(content) {
   const m = content.match(FM_RE);
@@ -1730,11 +1731,11 @@ async function collectVault(host, settings, context) {
   const now = new Date(context.now.getTime());
   const metadata = reportMetadata(settings, { ...context, now });
   const configDir = host.configDir;
-  const included = (path) => path !== configDir && !path.startsWith(configDir + "/") && !isExcluded(path, settings);
+  const includedFolder = (path) => !isExcludedFolder(path, settings, configDir);
   let files, folders;
   try {
-    files = host.files().filter((file) => included(file.path)).sort((a, b) => a.path.localeCompare(b.path));
-    folders = settings.reportIndexGaps ? host.folders(settings).filter((folder) => included(folder.path)).sort((a, b) => a.path.localeCompare(b.path)) : [];
+    files = host.files().filter((file) => includedFolder(parentPath(file.path))).sort((a, b) => a.path.localeCompare(b.path));
+    folders = settings.reportIndexGaps ? host.folders(settings).filter((folder) => includedFolder(folder.path)).sort((a, b) => a.path.localeCompare(b.path)) : [];
   } catch (error) {
     context.guard();
     throw apiError("unavailable", `Cannot enumerate the configured vault scope: ${error instanceof Error ? error.message : String(error)}`);
@@ -2024,8 +2025,9 @@ var OkfPlugin = class extends import_obsidian4.Plugin {
         );
         this.dirtyIndexFolders.clear();
         for (const path of folders) {
+          if (!this.folderIsIndexable(path)) continue;
           const folder = path === "/" || path === "" ? this.app.vault.getRoot() : this.app.vault.getAbstractFileByPath(path);
-          if (folder instanceof import_obsidian4.TFolder && this.folderIsIndexable(folder)) {
+          if (folder instanceof import_obsidian4.TFolder) {
             await this.generateIndexForFolder(folder, false);
           }
         }
@@ -2070,7 +2072,7 @@ var OkfPlugin = class extends import_obsidian4.Plugin {
       name: "Validate active note",
       checkCallback: (checking) => {
         const f = this.app.workspace.getActiveFile();
-        if (!f || f.extension !== "md") return false;
+        if (!f || !this.isConcept(f)) return false;
         if (!checking) void this.validateActive(f, true);
         return true;
       }
@@ -2080,7 +2082,7 @@ var OkfPlugin = class extends import_obsidian4.Plugin {
       name: "Fix active note (add missing OKF fields)",
       checkCallback: (checking) => {
         const f = this.app.workspace.getActiveFile();
-        if (!f || f.extension !== "md") return false;
+        if (!f || !this.isConcept(f)) return false;
         if (!checking) void this.fixFile(f, true);
         return true;
       }
@@ -2097,7 +2099,7 @@ var OkfPlugin = class extends import_obsidian4.Plugin {
       name: "Generate/refresh index.md for a folder",
       checkCallback: (checking) => {
         const f = this.app.workspace.getActiveFile();
-        if (!f || !(f.parent instanceof import_obsidian4.TFolder)) return false;
+        if (!((f == null ? void 0 : f.parent) instanceof import_obsidian4.TFolder) || !this.folderIsIndexable(f.parent.path)) return false;
         if (!checking) void this.generateIndexForFolder(f.parent);
         return true;
       }
@@ -2114,7 +2116,7 @@ var OkfPlugin = class extends import_obsidian4.Plugin {
       name: "Add log.md entry (current folder)",
       checkCallback: (checking) => {
         const f = this.app.workspace.getActiveFile();
-        if (!f || !(f.parent instanceof import_obsidian4.TFolder)) return false;
+        if (!((f == null ? void 0 : f.parent) instanceof import_obsidian4.TFolder) || !this.folderIsIndexable(f.parent.path)) return false;
         if (!checking) void this.addLogEntry(f.parent);
         return true;
       }
@@ -2124,7 +2126,7 @@ var OkfPlugin = class extends import_obsidian4.Plugin {
       name: "Migrate note to latest OKF",
       checkCallback: (checking) => {
         const f = this.app.workspace.getActiveFile();
-        if (!f || f.extension !== "md" || isReserved(f.path)) return false;
+        if (!f || !this.isConcept(f) || isReserved(f.path)) return false;
         if (!checking) void this.migrateActive(f);
         return true;
       }
@@ -2145,7 +2147,7 @@ var OkfPlugin = class extends import_obsidian4.Plugin {
             this.selfWrites.delete(file.path);
             return;
           }
-          liveCheck(file);
+          if (this.isConcept(file)) liveCheck(file);
         }
       })
     );
@@ -2173,6 +2175,7 @@ var OkfPlugin = class extends import_obsidian4.Plugin {
             this.selfWrites.delete(file.path);
             return;
           }
+          if (!this.isConcept(file)) return;
           const timer = window.setTimeout(() => {
             if (!this.unloaded) void this.onFileChanged(file);
           }, 300);
@@ -2180,19 +2183,16 @@ var OkfPlugin = class extends import_obsidian4.Plugin {
         }
       })
     );
-    this.registerEvent(
-      this.app.vault.on("delete", (file) => {
-        if (!this.layoutReady) return;
-        if (file instanceof import_obsidian4.TFile && file.extension !== "md") return;
-        this.markIndexDirty(parentPath(file.path));
-      })
-    );
+    const markParent = (file, path) => {
+      if (!this.layoutReady || file instanceof import_obsidian4.TFile && file.extension !== "md") return;
+      if (file instanceof import_obsidian4.TFolder && !this.folderIsIndexable(path)) return;
+      this.markIndexDirty(parentPath(path));
+    };
+    this.registerEvent(this.app.vault.on("delete", (file) => markParent(file, file.path)));
     this.registerEvent(
       this.app.vault.on("rename", (file, oldPath) => {
-        if (!this.layoutReady) return;
-        if (file instanceof import_obsidian4.TFile && file.extension !== "md") return;
-        this.markIndexDirty(parentPath(oldPath));
-        this.markIndexDirty(parentPath(file.path));
+        markParent(file, oldPath);
+        markParent(file, file.path);
       })
     );
     void settingsLoaded.then(() => {
@@ -2317,19 +2317,14 @@ var OkfPlugin = class extends import_obsidian4.Plugin {
     await this.saveData(this.settings);
     this.validatorsChanged();
   }
-  isConcept(file) {
-    if (file.extension !== "md") return false;
-    if (isExcluded(file.path, this.settings)) return false;
-    return true;
+  isConcept(file, settings = this.settings) {
+    return file.extension === "md" && this.folderIsIndexable(parentPath(file.path), settings);
   }
   isRoot(file) {
     return !file.path.includes("/");
   }
   candidateFiles(settings = this.settings) {
-    const configDir = this.app.vault.configDir;
-    return this.app.vault.getMarkdownFiles().filter(
-      (f) => !f.path.startsWith(configDir + "/") && !isExcluded(f.path, settings)
-    );
+    return this.app.vault.getMarkdownFiles().filter((f) => this.isConcept(f, settings));
   }
   /** Current report view, if open. */
   getReportView() {
@@ -2388,7 +2383,7 @@ var OkfPlugin = class extends import_obsidian4.Plugin {
    * in the folder the note sat in.
    */
   markIndexDirty(path) {
-    if (!this.settings.autoGenerateIndex) return;
+    if (!this.settings.autoGenerateIndex || !this.folderIsIndexable(path)) return;
     for (let p = path; ; p = parentPath(p)) {
       this.dirtyIndexFolders.add(p);
       if (p === "/" || p === "") break;
@@ -2403,6 +2398,7 @@ var OkfPlugin = class extends import_obsidian4.Plugin {
   async onStatusClick() {
     if (!this.apiV1 || this.unloaded) return;
     const file = this.app.workspace.getActiveFile();
+    if (file && !this.folderIsIndexable(parentPath(file.path))) return;
     if (!file || file.extension !== "md" || isReserved(file.path)) {
       await this.scanVault(true, false);
       return;
@@ -2430,6 +2426,7 @@ var OkfPlugin = class extends import_obsidian4.Plugin {
   }
   /** Open a modal asking the user to supply required OKF fields. */
   promptForRequiredFields(file, errors) {
+    if (!this.isConcept(file)) return;
     new OkfPromptModal(this.app, this, file, errors).open();
   }
   async validateActive(file, openReport) {
@@ -2440,7 +2437,7 @@ var OkfPlugin = class extends import_obsidian4.Plugin {
     const token = ++this.activeSequence;
     this.setActiveResult(null);
     if (!this.apiV1 || this.unloaded) return;
-    if (!this.isConcept(file) || file.path.startsWith(this.app.vault.configDir + "/")) return;
+    if (!this.isConcept(file)) return;
     const abort = this.activeAbort = new AbortController(), pass = this.controller.createPass(abort.signal);
     const current = () => {
       var _a2;
@@ -2614,7 +2611,7 @@ Click to open the report`
   }
   async fixFile(file, notify) {
     var _a, _b;
-    if (this.unloaded || !this.apiV1) return 0;
+    if (this.unloaded || !this.apiV1 || !this.isConcept(file)) return 0;
     const content = await this.app.vault.read(file);
     const issues = validateContent(
       file.path,
@@ -2653,7 +2650,7 @@ Click to open the report`
    * that ordinary save-time auto-fix deliberately skips.
    */
   async migrateActive(file) {
-    if (this.unloaded || !this.apiV1) return;
+    if (this.unloaded || !this.apiV1 || !this.isConcept(file)) return;
     const content = await this.app.vault.read(file);
     const issues = validateContent(
       file.path,
@@ -2682,7 +2679,7 @@ Click to open the report`
    * using Obsidian's safe frontmatter editor. Empty values are skipped.
    */
   async setFrontmatterFields(file, fields) {
-    if (this.unloaded || !this.apiV1) return;
+    if (this.unloaded || !this.apiV1 || !this.isConcept(file)) return;
     this.selfWrites.add(file.path);
     await this.app.fileManager.processFrontMatter(
       file,
@@ -2727,6 +2724,7 @@ Click to open the report`
       if (notify) new import_obsidian4.Notice("OKF: no folder for the active note.");
       return false;
     }
+    if (!this.folderIsIndexable(folder.path)) return false;
     const indexPath = folder.path === "/" || folder.path === "" ? "index.md" : `${folder.path}/index.md`;
     const existing = this.app.vault.getAbstractFileByPath(indexPath);
     const current = existing instanceof import_obsidian4.TFile ? await this.app.vault.read(existing) : null;
@@ -2783,7 +2781,7 @@ Click to open the report`
         if (bucket) bucket.push(entry);
         else byType.set(section, [entry]);
       } else if (child instanceof import_obsidian4.TFolder) {
-        if (!this.folderIsIndexable(child, settings)) continue;
+        if (!this.folderIsIndexable(child.path, settings)) continue;
         let childIndex = this.app.vault.getAbstractFileByPath(
           `${child.path}/index.md`
         );
@@ -2828,7 +2826,7 @@ Click to open the report`
       out = mergeIndex(
         current,
         entries,
-        (target) => this.app.vault.getAbstractFileByPath(base + target) !== null
+        (target) => this.listedTargetExists(base + target)
       );
     } else {
       out = renderIndex(entries, kept);
@@ -2888,7 +2886,7 @@ ${out}`;
     const unlisted = unlistedEntries(
       await this.app.vault.cachedRead(index),
       entries,
-      (target) => this.app.vault.getAbstractFileByPath(base + target) !== null
+      (target) => this.listedTargetExists(base + target, settings)
     );
     if (unlisted.length === 0) return null;
     return {
@@ -2915,7 +2913,7 @@ ${out}`;
     if (!settings.reportIndexGaps) return [];
     if (isReserved(file.path) !== "index") return [];
     const folder = file.parent;
-    if (!folder || !this.folderIsIndexable(folder, settings)) return [];
+    if (!folder || !this.folderIsIndexable(folder.path, settings)) return [];
     const gaps = await this.indexGapsForFolder(folder, settings);
     return gaps ? gaps.issues : [];
   }
@@ -2937,12 +2935,14 @@ ${out}`;
    * can't be reached — except the ones that aren't part of the bundle at all:
    * Obsidian's own config folder and anything the user excluded.
    */
-  folderIsIndexable(folder, settings = this.settings) {
-    const path = folder.path;
-    if (path === "/" || path === "") return true;
-    const config = this.app.vault.configDir;
-    if (path === config || path.startsWith(config + "/")) return false;
-    return !isExcluded(path, settings);
+  folderIsIndexable(path, settings = this.settings) {
+    return this.settingsReady && !this.unloaded && !isExcludedFolder(path, settings, this.app.vault.configDir);
+  }
+  /** An old generated entry can still resolve on disk after its folder is excluded. */
+  listedTargetExists(path, settings = this.settings) {
+    if (!this.folderIsIndexable(parentPath(path), settings)) return false;
+    const target = this.app.vault.getAbstractFileByPath(path);
+    return target instanceof import_obsidian4.TFolder ? this.folderIsIndexable(target.path, settings) : target instanceof import_obsidian4.TFile;
   }
   /**
    * Whether any folder worth listing somewhere below this one still has no
@@ -2953,7 +2953,7 @@ ${out}`;
   indexesMissingBelow(folder) {
     for (const child of folder.children) {
       if (!(child instanceof import_obsidian4.TFolder)) continue;
-      if (!this.folderIsIndexable(child)) continue;
+      if (!this.folderIsIndexable(child.path)) continue;
       const has = this.app.vault.getAbstractFileByPath(`${child.path}/index.md`) instanceof import_obsidian4.TFile;
       if (!has || this.indexesMissingBelow(child)) return true;
     }
@@ -2968,7 +2968,7 @@ ${out}`;
   indexableFolders(settings = this.settings) {
     const list = [];
     const walk = (folder) => {
-      if (!this.folderIsIndexable(folder, settings)) return;
+      if (!this.folderIsIndexable(folder.path, settings)) return;
       list.push(folder);
       for (const child of folder.children) {
         if (child instanceof import_obsidian4.TFolder) walk(child);
@@ -3007,7 +3007,7 @@ ${out}`;
     }
   }
   async addLogEntry(folder) {
-    if (!folder) return;
+    if (!folder || !this.folderIsIndexable(folder.path)) return;
     const logPath = folder.path === "/" || folder.path === "" ? "log.md" : `${folder.path}/log.md`;
     const today = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
     const entry = `* **Update**: `;
@@ -3246,7 +3246,7 @@ var OkfSettingTab = class extends import_obsidian4.PluginSettingTab {
       { name: "Scope & performance", heading: true },
       {
         name: "Excluded folders",
-        desc: "Comma-separated paths skipped by validation and index generation \u2014 use it for an attachments folder you'd rather not have an index.md in. The config folder is always skipped.",
+        desc: "Comma-separated, case-sensitive folders to skip. A name like assets matches at any depth; a vault-relative path like docs/assets skips only that subtree. The config folder is always skipped.",
         control: (row) => row.addText(
           (t) => t.setValue(s.excludeFolders.join(", ")).onChange((v) => {
             s.excludeFolders = list(v);

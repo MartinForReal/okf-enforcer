@@ -257,10 +257,15 @@ export function isReserved(path: string): "index" | "log" | null {
   return null;
 }
 
-export function isExcluded(path: string, settings: OkfSettings): boolean {
-  return settings.excludeFolders.some(
-    (folder) => folder && (path === folder || path.startsWith(folder + "/"))
-  );
+/** Bare names match folder segments; paths with a slash start at the vault root.
+ *  Pass a folder path, or parentPath(file.path) so a file never excludes itself. */
+export function isExcludedFolder(path: string, settings: OkfSettings, configDir: string): boolean {
+  if (path === "/" || path === "") return false;
+  if (path === configDir || path.startsWith(configDir + "/")) return true;
+  const segments = path.split("/");
+  return settings.excludeFolders.some((entry) => entry && (entry.includes("/")
+    ? path === entry || path.startsWith(entry + "/")
+    : segments.includes(entry)));
 }
 
 export function splitFrontmatter(
