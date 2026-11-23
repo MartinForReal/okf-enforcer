@@ -13049,7 +13049,7 @@ function migrateCitations(body) {
     const line = lines[end++].trimEnd();
     if (!line.trim()) continue;
     const item = /^[-*+]\s+(\S+)$/.exec(line);
-    if (!item || /[<>\[\]`]/.test(item[1])) return null;
+    if (!item || /[<>[\]`]/.test(item[1])) return null;
     resources.push(item[1]);
   }
   return resources.length ? { resources, body: lines.slice(0, start).join("") + lines.slice(end).join("") } : null;
