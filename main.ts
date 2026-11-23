@@ -6,6 +6,7 @@ import {
   Plugin,
   PluginSettingTab,
   Setting,
+  type TAbstractFile,
   TFile,
   TFolder,
   WorkspaceLeaf,
@@ -19,7 +20,7 @@ import {
   applyFixes,
   trustTierOfContent,
   isReserved,
-  isExcluded,
+  isExcludedFolder,
   basename,
   parentPath,
   oneLine,
@@ -118,7 +119,7 @@ export default class OkfPlugin extends Plugin {
       name: "Validate active note",
       checkCallback: (checking) => {
         const f = this.app.workspace.getActiveFile();
-        if (!f || f.extension !== "md") return false;
+        if (!f || !this.isConcept(f)) return false;
         if (!checking) void this.validateActive(f, true);
         return true;
       },
@@ -128,7 +129,7 @@ export default class OkfPlugin extends Plugin {
       name: "Fix active note (add missing OKF fields)",
       checkCallback: (checking) => {
         const f = this.app.workspace.getActiveFile();
-        if (!f || f.extension !== "md") return false;
+        if (!f || !this.isConcept(f)) return false;
         if (!checking) void this.fixFile(f, true);
         return true;
       },
@@ -143,7 +144,7 @@ export default class OkfPlugin extends Plugin {
       name: "Generate/refresh index.md for a folder",
       checkCallback: (checking) => {
         const f = this.app.workspace.getActiveFile();
-        if (!f || !(f.parent instanceof TFolder)) return false;
+        if (!(f?.parent instanceof TFolder) || !this.folderIsIndexable(f.parent.path)) return false;
         if (!checking) void this.generateIndexForFolder(f.parent);
         return true;
       },
@@ -158,7 +159,7 @@ export default class OkfPlugin extends Plugin {
       name: "Add log.md entry (current folder)",
       checkCallback: (checking) => {
         const f = this.app.workspace.getActiveFile();
-        if (!f || !(f.parent instanceof TFolder)) return false;
+        if (!(f?.parent instanceof TFolder) || !this.folderIsIndexable(f.parent.path)) return false;
         if (!checking) void this.addLogEntry(f.parent);
         return true;
       },
@@ -168,7 +169,7 @@ export default class OkfPlugin extends Plugin {
       name: "Migrate note to latest OKF",
       checkCallback: (checking) => {
         const f = this.app.workspace.getActiveFile();
-        if (!f || f.extension !== "md" || isReserved(f.path)) return false;
+        if (!f || !this.isConcept(f) || isReserved(f.path)) return false;
         if (!checking) void this.migrateActive(f);
         return true;
       },
@@ -190,7 +191,7 @@ export default class OkfPlugin extends Plugin {
             this.selfWrites.delete(file.path);
             return;
           }
-          liveCheck(file);
+          if (this.isConcept(file)) liveCheck(file);
         }
       })
     );
@@ -222,6 +223,7 @@ export default class OkfPlugin extends Plugin {
             this.selfWrites.delete(file.path);
             return;
           }
+          if (!this.isConcept(file)) return;
           // Defer briefly so the importer finishes writing the file body first.
           const timer = window.setTimeout(() => { if (!this.unloaded) void this.onFileChanged(file); }, 300);
           this.register(() => window.clearTimeout(timer));
@@ -233,19 +235,18 @@ export default class OkfPlugin extends Plugin {
     // listing as much as one arriving does, and neither fires "modify" or
     // "create". A rename touches two listings: the folder the note left and the
     // one it joined. ----
-    this.registerEvent(
-      this.app.vault.on("delete", (file) => {
-        if (!this.layoutReady) return;
-        if (file instanceof TFile && file.extension !== "md") return;
-        this.markIndexDirty(parentPath(file.path));
-      })
-    );
+    const markParent = (file: TAbstractFile, path: string) => {
+      if (!this.layoutReady || (file instanceof TFile && file.extension !== "md")) return;
+      // Check the folder itself before stripping its name. Check both sides of
+      // a move independently so the included side still loses or gains its entry.
+      if (file instanceof TFolder && !this.folderIsIndexable(path)) return;
+      this.markIndexDirty(parentPath(path));
+    };
+    this.registerEvent(this.app.vault.on("delete", (file) => markParent(file, file.path)));
     this.registerEvent(
       this.app.vault.on("rename", (file, oldPath) => {
-        if (!this.layoutReady) return;
-        if (file instanceof TFile && file.extension !== "md") return;
-        this.markIndexDirty(parentPath(oldPath));
-        this.markIndexDirty(parentPath(file.path));
+        markParent(file, oldPath);
+        markParent(file, file.path);
       })
     );
 
@@ -385,25 +386,15 @@ export default class OkfPlugin extends Plugin {
     this.validatorsChanged();
   }
 
-  private isConcept(file: TFile): boolean {
-    if (file.extension !== "md") return false;
-    if (isExcluded(file.path, this.settings)) return false;
-    return true;
+  private isConcept(file: TFile, settings = this.settings): boolean {
+    return file.extension === "md" && this.folderIsIndexable(parentPath(file.path), settings);
   }
   private isRoot(file: TFile): boolean {
     return !file.path.includes("/");
   }
 
   private candidateFiles(settings = this.settings): TFile[] {
-    // The config folder name is user-configurable (not always ".obsidian").
-    const configDir = this.app.vault.configDir;
-    return this.app.vault
-      .getMarkdownFiles()
-      .filter(
-        (f) =>
-          !f.path.startsWith(configDir + "/") &&
-          !isExcluded(f.path, settings)
-      );
+    return this.app.vault.getMarkdownFiles().filter((f) => this.isConcept(f, settings));
   }
 
   /** Current report view, if open. */
@@ -476,7 +467,7 @@ export default class OkfPlugin extends Plugin {
    * in the folder the note sat in.
    */
   private markIndexDirty(path: string): void {
-    if (!this.settings.autoGenerateIndex) return;
+    if (!this.settings.autoGenerateIndex || !this.folderIsIndexable(path)) return;
     for (let p = path; ; p = parentPath(p)) {
       this.dirtyIndexFolders.add(p);
       if (p === "/" || p === "") break;
@@ -492,6 +483,7 @@ export default class OkfPlugin extends Plugin {
       );
       this.dirtyIndexFolders.clear();
       for (const path of folders) {
+        if (!this.folderIsIndexable(path)) continue;
         // The root is asked for by name rather than looked up: every walk up the
         // tree ends there, so it is regenerated far too often to rest on whether
         // "/" happens to be a key in the vault's path map.
@@ -499,7 +491,7 @@ export default class OkfPlugin extends Plugin {
           path === "/" || path === ""
             ? this.app.vault.getRoot()
             : this.app.vault.getAbstractFileByPath(path);
-        if (folder instanceof TFolder && this.folderIsIndexable(folder)) {
+        if (folder instanceof TFolder) {
           await this.generateIndexForFolder(folder, false);
         }
       }
@@ -516,6 +508,7 @@ export default class OkfPlugin extends Plugin {
   async onStatusClick() {
     if (!this.apiV1 || this.unloaded) return;
     const file = this.app.workspace.getActiveFile();
+    if (file && !this.folderIsIndexable(parentPath(file.path))) return;
     if (!file || file.extension !== "md" || isReserved(file.path)) {
       await this.scanVault(true, false);
       return;
@@ -553,6 +546,7 @@ export default class OkfPlugin extends Plugin {
 
   /** Open a modal asking the user to supply required OKF fields. */
   promptForRequiredFields(file: TFile, errors: OkfIssue[]) {
+    if (!this.isConcept(file)) return;
     new OkfPromptModal(this.app, this, file, errors).open();
   }
 
@@ -563,7 +557,7 @@ export default class OkfPlugin extends Plugin {
     const token = ++this.activeSequence;
     this.setActiveResult(null);
     if (!this.apiV1 || this.unloaded) return;
-    if (!this.isConcept(file) || file.path.startsWith(this.app.vault.configDir + "/")) return;
+    if (!this.isConcept(file)) return;
     const abort = this.activeAbort = new AbortController(), pass = this.controller!.createPass(abort.signal);
     const current = () => !this.unloaded && !abort.signal.aborted && token === this.activeSequence && pass.isCurrent() &&
       this.app.workspace.getActiveFile()?.path === file.path;
@@ -721,7 +715,7 @@ export default class OkfPlugin extends Plugin {
   }
 
   async fixFile(file: TFile, notify: boolean): Promise<number> {
-    if (this.unloaded || !this.apiV1) return 0;
+    if (this.unloaded || !this.apiV1 || !this.isConcept(file)) return 0;
     const content = await this.app.vault.read(file);
     const issues = validateContent(
       file.path,
@@ -761,7 +755,7 @@ export default class OkfPlugin extends Plugin {
    * that ordinary save-time auto-fix deliberately skips.
    */
   async migrateActive(file: TFile) {
-    if (this.unloaded || !this.apiV1) return;
+    if (this.unloaded || !this.apiV1 || !this.isConcept(file)) return;
     const content = await this.app.vault.read(file);
     const issues = validateContent(
       file.path,
@@ -791,7 +785,7 @@ export default class OkfPlugin extends Plugin {
    * using Obsidian's safe frontmatter editor. Empty values are skipped.
    */
   async setFrontmatterFields(file: TFile, fields: Record<string, string>) {
-    if (this.unloaded || !this.apiV1) return;
+    if (this.unloaded || !this.apiV1 || !this.isConcept(file)) return;
     this.selfWrites.add(file.path);
     await this.app.fileManager.processFrontMatter(
       file,
@@ -841,6 +835,7 @@ export default class OkfPlugin extends Plugin {
       if (notify) new Notice("OKF: no folder for the active note.");
       return false;
     }
+    if (!this.folderIsIndexable(folder.path)) return false;
     const indexPath =
       folder.path === "/" || folder.path === ""
         ? "index.md"
@@ -926,7 +921,7 @@ export default class OkfPlugin extends Plugin {
         // A subdirectory's document is its own index.md, so that is what the
         // entry links at. A bare `folder/` link resolves to a note that doesn't
         // exist, and clicking it creates a stray file in the vault.
-        if (!this.folderIsIndexable(child, settings)) continue;
+        if (!this.folderIsIndexable(child.path, settings)) continue;
         // Write that index before linking at it. Marking only ever walks up
         // from a change, so a subfolder nothing has touched is never queued on
         // its own; without this, a listing could point at an index nothing
@@ -1013,7 +1008,7 @@ export default class OkfPlugin extends Plugin {
       out = mergeIndex(
         current,
         entries,
-        (target) => this.app.vault.getAbstractFileByPath(base + target) !== null
+        (target) => this.listedTargetExists(base + target)
       );
     } else {
       out = renderIndex(entries, kept);
@@ -1079,7 +1074,7 @@ export default class OkfPlugin extends Plugin {
     const unlisted = unlistedEntries(
       await this.app.vault.cachedRead(index),
       entries,
-      (target) => this.app.vault.getAbstractFileByPath(base + target) !== null
+      (target) => this.listedTargetExists(base + target, settings)
     );
     if (unlisted.length === 0) return null;
     return {
@@ -1107,7 +1102,7 @@ export default class OkfPlugin extends Plugin {
     if (!settings.reportIndexGaps) return [];
     if (isReserved(file.path) !== "index") return [];
     const folder = file.parent;
-    if (!folder || !this.folderIsIndexable(folder, settings)) return [];
+    if (!folder || !this.folderIsIndexable(folder.path, settings)) return [];
     const gaps = await this.indexGapsForFolder(folder, settings);
     return gaps ? gaps.issues : [];
   }
@@ -1131,12 +1126,16 @@ export default class OkfPlugin extends Plugin {
    * can't be reached — except the ones that aren't part of the bundle at all:
    * Obsidian's own config folder and anything the user excluded.
    */
-  private folderIsIndexable(folder: TFolder, settings = this.settings): boolean {
-    const path = folder.path;
-    if (path === "/" || path === "") return true;
-    const config = this.app.vault.configDir;
-    if (path === config || path.startsWith(config + "/")) return false;
-    return !isExcluded(path, settings);
+  private folderIsIndexable(path: string, settings = this.settings): boolean {
+    // Layout and folder events can arrive before the saved exclusions do.
+    return this.settingsReady && !this.unloaded && !isExcludedFolder(path, settings, this.app.vault.configDir);
+  }
+
+  /** An old generated entry can still resolve on disk after its folder is excluded. */
+  private listedTargetExists(path: string, settings = this.settings): boolean {
+    if (!this.folderIsIndexable(parentPath(path), settings)) return false;
+    const target = this.app.vault.getAbstractFileByPath(path);
+    return target instanceof TFolder ? this.folderIsIndexable(target.path, settings) : target instanceof TFile;
   }
 
   /**
@@ -1148,7 +1147,7 @@ export default class OkfPlugin extends Plugin {
   private indexesMissingBelow(folder: TFolder): boolean {
     for (const child of folder.children) {
       if (!(child instanceof TFolder)) continue;
-      if (!this.folderIsIndexable(child)) continue;
+      if (!this.folderIsIndexable(child.path)) continue;
       const has =
         this.app.vault.getAbstractFileByPath(`${child.path}/index.md`) instanceof
         TFile;
@@ -1166,7 +1165,7 @@ export default class OkfPlugin extends Plugin {
   private indexableFolders(settings = this.settings): TFolder[] {
     const list: TFolder[] = [];
     const walk = (folder: TFolder) => {
-      if (!this.folderIsIndexable(folder, settings)) return;
+      if (!this.folderIsIndexable(folder.path, settings)) return;
       list.push(folder);
       for (const child of folder.children) {
         if (child instanceof TFolder) walk(child);
@@ -1212,7 +1211,7 @@ export default class OkfPlugin extends Plugin {
   }
 
   async addLogEntry(folder: TFolder) {
-    if (!folder) return;
+    if (!folder || !this.folderIsIndexable(folder.path)) return;
     const logPath =
       folder.path === "/" || folder.path === ""
         ? "log.md"
@@ -1539,7 +1538,7 @@ class OkfSettingTab extends PluginSettingTab {
       { name: "Scope & performance", heading: true },
       {
         name: "Excluded folders",
-        desc: "Comma-separated paths skipped by validation and index generation — use it for an attachments folder you'd rather not have an index.md in. The config folder is always skipped.",
+        desc: "Comma-separated, case-sensitive folders to skip. A name like assets matches at any depth; a vault-relative path like docs/assets skips only that subtree. The config folder is always skipped.",
         control: (row) =>
           row.addText((t) =>
             t.setValue(s.excludeFolders.join(", ")).onChange((v) => {

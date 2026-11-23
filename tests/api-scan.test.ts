@@ -45,6 +45,24 @@ test("configured exclusions and a custom config directory are not scanned", asyn
   assert.deepEqual(result.scope, { kind: "configured-vault", configDir: "_config", excludeFolders: ["Templates"] });
 });
 
+test("the shared scan filters folder segments, never the file's own name", async () => {
+  const refuse = async () => { throw new Error("out-of-scope content was read"); };
+  const h = harness([
+    file("assets/a.md", refuse), file("docs/assets/deep/a.md", refuse), file("docs/private/a.md", refuse),
+    file("docs/FAQ.md/a.md", refuse), file("FAQ.md"), file("notes/Keep.md"), file("other/docs/private/a.md"),
+  ], [
+    { path: "docs/assets", check: refuse }, { path: "docs/assets/deep", check: refuse },
+    { path: "docs/private", check: refuse }, { path: "docs/FAQ.md", check: refuse },
+    { path: "docs/assets-old", check: async () => null }, { path: "other/docs/private", check: async () => null },
+  ]);
+  h.settings.excludeFolders = ["assets", "docs/private", "FAQ.md", "notes/Keep.md"];
+  h.settings.reportIndexGaps = true;
+  const scan = await h.api.scanVault();
+  assert.equal(scan.status, "complete");
+  assert.deepEqual(scan.files.map((f) => f.path), ["FAQ.md", "notes/Keep.md", "other/docs/private/a.md"]);
+  assert.deepEqual(scan.folders.map((f) => f.path), ["docs/assets-old", "other/docs/private"]);
+});
+
 test("an unreadable note makes coverage partial rather than silently conformant", async () => {
   const h = harness([file("clean.md"), file("denied.md", async () => { throw new Error("read denied"); })]);
   const result = await h.api.scanVault();

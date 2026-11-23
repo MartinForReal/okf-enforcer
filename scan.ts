@@ -2,7 +2,7 @@
 import type { OutcomeCounts, ScanOutcome, VaultReport } from "./validation-types";
 import type { NoteEvaluation } from "./api-service";
 import type { ExtensionEvaluation } from "./extensions";
-import { isExcluded, validateContent, type OkfIssue, type OkfSettings } from "./validator";
+import { isExcludedFolder, parentPath, validateContent, type OkfIssue, type OkfSettings } from "./validator";
 import { apiError, conformanceFor, publicDiagnostics, reportMetadata, type EvaluationContext } from "./validation";
 
 export interface ScanFile { path: string; read(): Promise<string> }
@@ -62,13 +62,12 @@ export async function collectVault(host: ScanHost, settings: OkfSettings, contex
   const now = new Date(context.now.getTime());
   const metadata = reportMetadata(settings, { ...context, now });
   const configDir = host.configDir;
-  const included = (path: string) =>
-    path !== configDir && !path.startsWith(configDir + "/") && !isExcluded(path, settings);
+  const includedFolder = (path: string) => !isExcludedFolder(path, settings, configDir);
   let files: ScanFile[], folders: ScanFolder[];
   try {
-    files = host.files().filter((file) => included(file.path)).sort((a, b) => a.path.localeCompare(b.path));
+    files = host.files().filter((file) => includedFolder(parentPath(file.path))).sort((a, b) => a.path.localeCompare(b.path));
     folders = settings.reportIndexGaps
-      ? host.folders(settings).filter((folder) => included(folder.path)).sort((a, b) => a.path.localeCompare(b.path))
+      ? host.folders(settings).filter((folder) => includedFolder(folder.path)).sort((a, b) => a.path.localeCompare(b.path))
       : [];
   } catch (error) {
     context.guard();
