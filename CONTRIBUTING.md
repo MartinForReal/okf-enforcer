@@ -19,8 +19,9 @@ into `<your-vault>/.obsidian/plugins/okf-enforcer/` and reload Obsidian. The
 
 ## Before opening a pull request
 
-- Run `npm test` — these are Node tests with Obsidian boundary doubles, not
-  proof of actual YAML parsing, desktop UI behavior or mobile acceptance.
+- Run `npm test` — the provenance fixer tests parse emitted YAML with an
+  independent parser. Obsidian itself is doubled; the suite does not prove
+  Obsidian parser behavior, desktop UI behavior or mobile acceptance.
 - Run `npx tsc --noEmit` — the build must type-check cleanly.
 - Run `npm run build` — `main.js` must build without errors.
 - **Commit the rebuilt `main.js`.** It is a tracked artifact, not a build output
