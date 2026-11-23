@@ -21,6 +21,7 @@
     "@types/node": "^20.11.0",
     "esbuild": "0.28.1",
     "obsidian": "1.14.4",
-    "typescript": "5.4.5"
+    "typescript": "5.4.5",
+    "yaml": "2.9.1"
   }
 }

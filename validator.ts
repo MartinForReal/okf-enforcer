@@ -1594,6 +1594,19 @@ function hasNonEmpty(data: Record<string, unknown>, key: string): boolean {
   return true;
 }
 
+// JSON escaping covers quotes, backslashes and ASCII controls. Escape the
+// remaining non-printable characters and Unicode line separators for YAML.
+function yamlString(value: string): string {
+  return JSON.stringify(value).replace(/[\u007f-\u009f\u2028\u2029\ufffe\uffff]/g,
+    (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
+
+// atYaml may be an existing YAML scalar: do not double-escape its quotes,
+// strip an inline comment, or normalize an offset through a JavaScript Date.
+function generatedLines(actor: string, atYaml: string): string[] {
+  return ["generated:", `  by: ${yamlString(actor)}`, atYaml ? `  at: ${atYaml}` : "  at:"];
+}
+
 export function applyFixes(
   path: string,
   content: string,
@@ -1613,51 +1626,103 @@ export function applyFixes(
   );
   if (fixes.size === 0) return { content, applied };
 
-  const nowIso = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  const nowYaml = yamlString(new Date().toISOString().replace(/\.\d{3}Z$/, "Z"));
   const actor = settings.defaultActor || "okf-enforcer/0.6";
   const title = basename(path);
   const split = splitFrontmatter(content);
+  const eol = content.match(/\r?\n/)?.[0] ?? "\n";
 
   if (!split.hasFm) {
     const lines = [
-      `type: ${settings.defaultType}`,
-      `title: ${title}`,
-      `generated: { by: ${actor}, at: ${nowIso} }`,
+      `type: ${yamlString(settings.defaultType)}`,
+      `title: ${yamlString(title)}`,
+      ...generatedLines(actor, nowYaml),
     ];
-    const fm = `---\n${lines.join("\n")}\n---\n\n`;
+    const fm = ["---", ...lines, "---", "", ""].join(eol);
     applied.push("added frontmatter (type, title, generated)");
-    return { content: fm + content.replace(/^\s+/, ""), applied };
+    return { content: fm + content, applied };
   }
 
-  const fmLines = split.raw.split(/\r?\n/);
+  // Keep the terminator on each existing line. Adding a field must not
+  // normalize the rest of the frontmatter (even if its line endings differ).
+  const header = content.slice(3 + eol.length, content.length - split.body.length - 3);
+  const fmLines: string[] = header.match(/[^\n]*\n/g) ?? [];
+  const firstKey = fmLines.find((text) => text.trim() && !text.trimStart().startsWith("#")) ?? "";
+  // A block field cannot be appended to a document enclosed in { ... }.
+  // Leave the author's flow mapping intact rather than rewriting the document.
+  if (firstKey.trimStart().startsWith("{")) return { content, applied };
+  const indent = firstKey.match(/^ */)![0];
+  const line = (text: string) => `${indent}${text}${eol}`;
   let body = split.body;
-  const hasKey = (k: string) =>
-    fmLines.some((l) => new RegExp(`^${k}\\s*:`).test(l.trim()));
+  const keyPattern = (k: string) => new RegExp(`^${indent}(?:${k}|"${k}"|'${k}')[ \\t]*:(?=[ \\t\\r\\n])`);
+  const keyIndex = (k: string) => {
+    const pattern = keyPattern(k);
+    return fmLines.findIndex((text) => pattern.test(text));
+  };
+  const hasKey = (k: string) => keyIndex(k) !== -1;
 
   if (fixes.has("add-type") && !hasKey("type")) {
-    fmLines.unshift(`type: ${settings.defaultType}`);
+    fmLines.unshift(line(`type: ${yamlString(settings.defaultType)}`));
     applied.push(`added type: ${settings.defaultType}`);
   }
   if (fixes.has("add-title") && !hasKey("title")) {
-    fmLines.push(`title: ${title}`);
+    fmLines.push(line(`title: ${yamlString(title)}`));
     applied.push("added title");
   }
   if (fixes.has("add-generated") && !hasKey("generated")) {
-    fmLines.push(`generated: { by: ${actor}, at: ${nowIso} }`);
+    fmLines.push(...generatedLines(actor, nowYaml).map(line));
     applied.push("added generated");
   }
 
-  // §13.1 migration: rewrite a legacy `timestamp: X` into `generated: { by, at: X }`,
-  // preserving the original timestamp value as `generated.at`.
-  if (fixes.has("migrate-timestamp") && hasKey("timestamp") && !hasKey("generated")) {
-    for (let i = 0; i < fmLines.length; i++) {
-      const m = fmLines[i].match(/^(\s*)timestamp\s*:\s*(.+?)\s*$/);
-      if (m) {
-        const at = m[2].replace(/^["']|["']$/g, "");
-        fmLines[i] = `${m[1]}generated: { by: ${actor}, at: ${at} }`;
-        applied.push("migrated timestamp → generated");
-        break;
+  // §13.1: move only the top-level timestamp and its scalar under generated.at.
+  if (fixes.has("migrate-timestamp") && !hasKey("generated")) {
+    const i = keyIndex("timestamp");
+    if (i !== -1) {
+      let at = fmLines[i].replace(keyPattern("timestamp"), "").replace(/^[ \t]+|\r?\n$/g, "");
+      // Quoted and block scalars can continue on indented lines. Keep their
+      // YAML spelling (escapes, folding, chomping) at the new nesting level.
+      const properties = /^(?:[&!]\S+(?:[ \t]+|$))*/;
+      let scalarStart = at.replace(properties, "");
+      let explicitlyTagged = /!/.test(at.match(properties)![0]);
+      for (let j = i + 1; (!scalarStart || scalarStart.startsWith("#")) && j < fmLines.length; j++) {
+        const text = fmLines[j].trim();
+        if (!text || text.startsWith("#")) continue;
+        if (!fmLines[j].startsWith(indent + " ")) break;
+        explicitlyTagged ||= /!/.test(text.match(properties)![0]);
+        scalarStart = text.replace(properties, "");
       }
+      const blockScalar = /^[|>]/.test(scalarStart);
+      const openQuote = /^(?:"(?:[^"\\]|\\.)*\\?|'(?:[^']|'')*)$/.test(scalarStart);
+      let end = i + 1;
+      for (let j = end; j < fmLines.length; j++) {
+        const next = fmLines[j];
+        if (!next.trim()) {
+          if (blockScalar && next.startsWith(indent + " ")) end = j + 1;
+          continue;
+        }
+        if (!next.startsWith(indent + " ")) {
+          if (next.trimStart().startsWith("#")) continue;
+          break;
+        }
+        if (!next.trimStart().startsWith("#") || blockScalar || openQuote) end = j + 1;
+      }
+      if (end === i + 1) {
+        // Some readers implicitly resolve an unquoted ISO timestamp to a Date.
+        // Quote the value, not its trailing comment; retain offset and precision.
+        at = at.replace(/^((?:&\S+[ \t]+)?)(\d{4}-\d\d?-\d\d?.*?)([ \t]+#.*|[ \t]*)$/,
+          (_, anchor: string, value: string, tail: string) => anchor + yamlString(value) + tail);
+      } else {
+        // A plain scalar may start or continue on the next line. A string
+        // tag types the whole value without changing YAML's line folding.
+        if (/^\d{4}-\d\d?-\d\d?/.test(scalarStart) && !explicitlyTagged) {
+          at = at ? `!!str ${at}` : "!!str";
+        }
+        for (let j = i + 1; j < end; j++) {
+          if (fmLines[j].startsWith(indent + " ")) fmLines[j] = "  " + fmLines[j];
+        }
+      }
+      fmLines.splice(i, 1, ...generatedLines(actor, at).map(line));
+      applied.push("migrated timestamp → generated");
     }
   }
 
@@ -1667,13 +1732,13 @@ export function applyFixes(
     const migrated = migrateCitations(body);
     if (migrated) {
       body = migrated.body;
-      fmLines.push("sources:");
-      for (const r of migrated.resources) fmLines.push(`  - resource: ${r}`);
+      fmLines.push(line("sources:"));
+      for (const r of migrated.resources) fmLines.push(line(`  - resource: ${r}`));
       applied.push(`migrated # Citations → sources (${migrated.resources.length})`);
     }
   }
 
-  const rebuilt = `---\n${fmLines.join("\n")}\n---${body}`;
+  const rebuilt = `---${eol}${fmLines.join("")}---${body}`;
   return { content: rebuilt, applied };
 }
 

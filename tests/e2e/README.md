@@ -2,7 +2,7 @@
 
 This is a disposable **test companion**, not a shipped integration. It uses the
 real provider bundle, Obsidian YAML parser, plugin loader, vault, and report UI.
-Node tests use JSON-flow frontmatter only and do not establish runtime acceptance.
+Node tests do not run Obsidian's own YAML parser or establish runtime acceptance.
 
 1. `npm run build`
 2. `node tests/e2e/prepare.mjs` prints a new marked fixture root, vault, profile,
