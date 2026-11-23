@@ -5,4 +5,8 @@ Licensed under the Apache License, Version 2.0 (see LICENSE).
 
 This product implements the Open Knowledge Format (OKF) specification by
 Google Cloud Platform:
-https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md
+https://github.com/open-knowledge-format/open-knowledge-format/blob/527e81aff55992be21507e97004286789126f88c/SPEC.md
+
+The Acme Retail test examples are reproduced from the same upstream revision
+under Apache-2.0; see tests/fixtures/README.md. The distributable main.js
+includes the notices for its bundled YAML and Markdown parsing libraries.

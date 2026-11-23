@@ -2,12 +2,15 @@
 import type { OkfApiV1, ValidationProvider } from "./api";
 import type { ContentRequest, ScanOptions } from "./validation-types";
 import { ExtensionRegistry, type ExtensionEvaluation } from "./extensions";
-import { collectVault, toPublicVaultReport, type ScanHost } from "./scan";
+import { collectVault, scopedInventory, toPublicVaultReport, type ScanHost } from "./scan";
 import { OKF_VERSION, validateContent, type OkfSettings, type OkfIssue } from "./validator";
+import { legacy, readFrontmatter, supported, text, type BundleContext } from "./frontmatter";
+import { trustTier } from "./signals";
 import type { ReportMetadata, Conformance } from "./validation-types";
 import { apiError, snapshotSettings, validateProvidedContent, conformanceFor, reportMetadata } from "./validation";
 
 export interface NoteEvaluation extends ReportMetadata {
+  trustTier?: ReturnType<typeof trustTier>;
   issues: OkfIssue[];
   conformance: Conformance;
   extensions: ExtensionEvaluation;
@@ -16,7 +19,7 @@ export interface ValidationPass {
   settings: OkfSettings;
   now: Date;
   isCurrent(): boolean;
-  evaluate: (path: string, content: string) => Promise<NoteEvaluation>;
+  evaluate: (path: string, content: string, bundle?: BundleContext) => Promise<NoteEvaluation>;
 }
 
 export interface ApiHost extends ScanHost {
@@ -57,21 +60,35 @@ export class ApiController {
     this.validators.dispose();
   }
 
+  async readBundle(settings = this.host.settings()): Promise<BundleContext> {
+    const exists = scopedInventory(this.host, settings);
+    try {
+      const index = await (this.host.readRootIndex ? this.host.readRootIndex() : this.host.files().find(f => f.path === "index.md")?.read());
+      const fm = index == null ? null : readFrontmatter(index);
+      return { observed: true, exists, version: fm?.version, unreadableRoot: !!fm?.error };
+    } catch { return { exists, unreadableRoot: true }; }
+  }
+
   /** One pass captures configuration, time and registrations for active/scan/fix. */
   createPass(signal?: AbortSignal): ValidationPass {
     this.ensureAvailable();
     const settings = snapshotSettings(this.host.settings());
     const now = new Date(this.clock().getTime()), snapshot = this.validators.snapshot();
     const metadata = reportMetadata(settings, { pluginVersion: this.pluginVersion, now });
+    let root: Promise<BundleContext> | undefined;
     return {
       settings, now,
       isCurrent: () => !this.disposed && !!this.facade && snapshot.revision === this.validators.revision,
-      evaluate: async (path, content) => {
+      evaluate: async (path, content, bundle) => {
         this.ensureAvailable();
-        const core = validateContent(path, content, !path.includes("/"), settings, now);
-        const extensions = await this.validators.validate(path, content, core, now, snapshot, signal);
+        const fm = readFrontmatter(content);
+        bundle ??= path === "index.md" ? { version: fm.version, exists: scopedInventory(this.host, settings) } : await (root ??= this.readBundle(settings));
+        this.ensureAvailable();
+        const core = validateContent(path, content, !path.includes("/"), settings, now, bundle, fm);
+        const extensions = await this.validators.validate(path, content, core, now, snapshot, signal, fm, legacy(bundle.version));
         this.ensureAvailable();
         return { ...metadata, issues: [...core, ...extensions.issues],
+          trustTier: supported(bundle) && settings.warnTrustFields && fm.data && text(fm.data.type) ? trustTier(fm.data, bundle.version) : undefined,
           conformance: conformanceFor(core, metadata.checkCoverage), extensions };
       },
     };

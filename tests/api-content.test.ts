@@ -11,12 +11,26 @@ const settings = () => ({ ...snapshotSettings(DEFAULT_SETTINGS), warnMissingFiel
 test("supplied unsaved content produces scoped core diagnostics, not fix instructions", () => {
   const report = validateProvidedContent({ path: "unsaved.md", content: "# No frontmatter" }, settings(), context);
   assert.deepEqual(report.scope, { kind: "content", path: "unsaved.md" });
-  assert.equal(report.conformance, "non-conformant");
+  assert.equal(report.conformance, "conformant");
   assert.equal(report.diagnostics[0].source, "okf");
-  assert.equal(report.diagnostics[0].severity, "error");
+  assert.equal(report.diagnostics[0].severity, "warning");
   assert.equal("fix" in report.diagnostics[0], false);
   assert.equal(report.apiVersion, 1);
-  assert.equal(report.okfVersion, "0.2");
+  assert.equal(report.okfVersion, "0.3");
+});
+
+test("only exact delimiters enclosing a YAML 1.2 mapping form readable frontmatter", () => {
+  const check = (content: string) => validateProvidedContent({ path: "a.md", content }, settings(), context);
+  for (const text of ["type: Topic\ntype: Task", "[Topic]", "false", "null", "type: ["]) {
+    assert.equal(check(`---\n${text}\n---\n`).conformance, "non-conformant", text);
+  }
+  assert.equal(check("---\ntype: Topic\n---not a delimiter\n").conformance, "non-conformant");
+  assert.deepEqual(check("---\r\ntype: no\r\nx-local: {nested: yes}\r\n---\r\n").diagnostics, []);
+  for (const text of ["title: README", "type: []", "type: ''", "type: null"]) {
+    const report = check(`---\n${text}\n---\n`);
+    assert.equal(report.conformance, "conformant");
+    assert.match(report.diagnostics[0].message, /not a concept/i);
+  }
 });
 
 for (const path of ["", "/absolute.md", "C:/absolute.md", "../escape.md", "a/./b.md", "a/../b.md", "a\\b.md", "a//b.md", "note.txt", "a\u0000.md"]) {
@@ -44,7 +58,7 @@ test("invalid request values reject instead of coercing content", () => {
 });
 
 test("explicit excluded content is checked rather than silently omitted", () => {
-  const report = validateProvidedContent({ path: "Templates/unsaved.md", content: "bad" }, settings(), context);
+  const report = validateProvidedContent({ path: "Templates/unsaved.md", content: "---\ntype: [\n---" }, settings(), context);
   assert.equal(report.conformance, "non-conformant");
   assert.equal(report.diagnostics.length, 1);
 });
@@ -62,12 +76,13 @@ test("Portent warnings are identified separately and never fail core conformance
   assert.equal(report.diagnostics.some((d) => d.source === "portent" && d.severity === "warning"), true);
 });
 
-test("disabled error-capable check makes conformance unknown, not clean", () => {
+test("turning off optional computation advice does not disable §11 structural checks", () => {
   const s = settings(); s.checkAttestedComputation = false;
   const report = validateProvidedContent({ path: "x.md", content: note({ type: "Concept" }) }, s, context);
-  assert.equal(report.checkCoverage, "reduced");
-  assert.equal(report.conformance, "unknown");
-  assert.deepEqual(report.disabledErrorChecks, ["checkAttestedComputation"]);
+  assert.equal(report.checkCoverage, "full");
+  assert.equal(report.conformance, "conformant");
+  assert.equal(report.enabledChecks.checkAttestedComputation, false);
+  assert.deepEqual(report.disabledErrorChecks, []);
 });
 
 test("warning-only toggles do not reduce core coverage", () => {

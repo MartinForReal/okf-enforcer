@@ -13,6 +13,8 @@ try {
     outExtension: { ".js": ".cjs" },
     bundle: true,
     platform: "node",
+    // The host provides browser timers even to checks that need no Obsidian imports.
+    banner: { js: "globalThis.window ??= globalThis;" },
     format: "cjs",
     target: "node20",
     alias: { obsidian: path.resolve("tests/obsidian-stub.ts") },

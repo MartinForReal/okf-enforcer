@@ -73,7 +73,9 @@ export default class E2EConsumer extends Plugin {
     try {
       await test("registration API becomes ready in actual Obsidian", async () => {
         await waitFor(() => getOkfApi(this.app), "registration apiV1");
-        receipt.pluginVersion = getOkfApi(this.app)!.pluginVersion;
+        const api = getOkfApi(this.app)!;
+        assert(api.okfVersion === "0.3" && api.apiVersion === 1 && !('scanVault' in api), "Wrong spec version or expanded registration API");
+        receipt.pluginVersion = api.pluginVersion; receipt.okfVersion = api.okfVersion;
       });
       if (results[0].status !== "passed") return finish();
       const clean = this.app.vault.getAbstractFileByPath("clean.md"); assert(clean instanceof TFile, "Missing clean fixture");
@@ -88,6 +90,7 @@ export default class E2EConsumer extends Plugin {
         assert(hit?.issues.some((i: any) => i.providerId === "fixture/owner"), "Companion finding missing");
         assert(hit.conformance === "conformant", "Extension error changed core conformance");
         assert(host().statusEl.textContent.includes("OKF ✓") && host().statusEl.textContent.includes("Ext ✖ 1"), "Status merged core/extension errors");
+        assert(host().statusEl.getAttribute("aria-label").includes("Trust tier: machine-confirmed"), "Historical human review incorrectly granted current trust");
         const view = this.app.workspace.getLeavesOfType("okf-report-view")[0]?.view as any;
         assert(view?.contentEl.textContent.includes("Fixture validation"), "Visible source label missing");
       });
@@ -98,9 +101,9 @@ export default class E2EConsumer extends Plugin {
         const policy = context.frontmatter?.policy as any;
         assert(policy.owners[0] === "human:fixture", "Nested YAML list missing");
         assert(Object.isFrozen(policy.owners) && !Reflect.set(policy.owners, "0", "tampered"), "Nested context is mutable");
-        assert(this.seen.some((c) => c.path === "index.md" && c.kind === "index"), "Reserved index not identified");
+        assert(this.seen.some((c) => c.path === "index.md" && c.kind === "index" && c.frontmatter?.okf_version === "0.3" && c.frontmatter?.license === "CC0-1.0"), "v0.3 root metadata not identified");
         assert(this.seen.some((c) => c.path === "invalid-yaml.md" && c.frontmatterState === "invalid"), "Invalid YAML state lost");
-        assert(this.seen.some((c) => c.path === "broken.md" && c.frontmatterState === "missing"), "Missing YAML state lost");
+        assert(!this.seen.some((c) => c.path === "broken.md"), "Untyped v0.3 Markdown was dispatched as a concept");
         assert(!this.seen.some((c) => c.path.startsWith("Excluded/") || c.path.startsWith(".obsidian/")), "Excluded/config note reached provider");
       });
       await test("full report agrees with active findings and preserves core errors", async () => {
@@ -109,7 +112,11 @@ export default class E2EConsumer extends Plugin {
         const full = view.results.find((r: any) => r.path === "clean.md");
         assert(full.issues.filter((i: any) => i.providerId === "fixture/owner").length === 1, "Duplicate or missing full-scan finding");
         assert(p.activeResult.issues.filter((i: any) => i.providerId === "fixture/owner").length === 1, "Active/full disagree");
-        assert(p.lastSummary.coreErrorFiles >= 3 && p.lastSummary.extensionErrorFiles >= 1, "Core/extension counts lost");
+        const coreErrors = view.results.filter((r: any) => r.issues.some((i: any) => !i.providerId && i.severity === "error")).map((r: any) => r.path).sort();
+        assert(JSON.stringify(coreErrors) === JSON.stringify(["invalid-yaml.md", "nested/log.md"]), `Wrong structural errors: ${coreErrors}`);
+        assert(p.lastSummary.coreErrorFiles === 2 && p.lastSummary.extensionErrorFiles >= 1, "Core/extension counts lost");
+        const hasAdvice = (path: string, rule: string) => view.results.find((r: any) => r.path === path)?.issues.some((i: any) => !i.providerId && i.severity === "warning" && i.rule === rule);
+        assert(hasAdvice("broken.md", "§3.2") && hasAdvice("computation.md", "§10.2"), "Lost untyped-note or missing runtime advice");
         assert(view.contentEl.textContent.includes("extension errors") && view.contentEl.textContent.includes("core errors"), "Separate summary labels missing");
       });
       await test("status click preserves extension findings and does not rewrite a core-valid note", async () => {
@@ -146,7 +153,7 @@ export default class E2EConsumer extends Plugin {
         const hold = new Promise<void>((resolve) => { release = resolve; });
         const api = getOkfApi(this.app)!;
         const removeOld = api.registerValidator({ id: "fixture/old-pass", name: "Old pass", validate: async (context) => {
-          if (context.path !== "broken.md") return [];
+          if (context.path !== "computation.md") return [];
           signal ??= context.signal; await hold;
           return [{ rule: "obsolete", message: "Obsolete scan finding", severity: "warning" }];
         } });
@@ -223,7 +230,7 @@ export default class E2EConsumer extends Plugin {
         try { await manager.loadPlugin("okf-enforcer"); await sleep(80); assert(!getOkfApi(this.app), "Failed settings published API"); }
         finally { Plugin.prototype.loadData = original; await manager.unloadPlugin("okf-enforcer"); await manager.loadPlugin("okf-enforcer"); await waitFor(() => getOkfApi(this.app), "host recovery"); }
       }, "rejected host Plugin.loadData");
-      await test("read failure and reduced checks show incomplete core coverage", async () => {
+      await test("read failure makes conformance unknown even with optional computation advice off", async () => {
         const original = this.app.vault.read;
         this.app.vault.read = async function(file) { if (file.path === "broken.md") throw new Error("Injected read denial"); return original.call(this, file); };
         try {
@@ -231,6 +238,7 @@ export default class E2EConsumer extends Plugin {
           await host().scanVault(false, true);
           const view = this.app.workspace.getLeavesOfType("okf-report-view")[0]?.view as any;
           assert(host().lastSummary.conformance === "unknown" && host().lastSummary.counts.files.unreadable === 1, "Partial coverage hidden");
+          assert(host().lastSummary.status === "partial" && host().lastSummary.checkCoverage === "full", "Disabled optional advice was confused with a skipped structural check");
           assert(/incomplete/i.test(view.contentEl.textContent) && !view.contentEl.textContent.includes("All checked notes conform"), "Incomplete report claimed clean");
         } finally { this.app.vault.read = original; host().settings.checkAttestedComputation = true; }
       }, "one real vault.read rejection, Attested check disabled");
@@ -241,6 +249,29 @@ export default class E2EConsumer extends Plugin {
       });
       await test("validation alone leaves Markdown unchanged", async () => { assert(hashes() === before, "Validation changed notes"); });
       // Intentional fixture mutations start here; not part of the no-write claim.
+      await test("actual root declaration selects v0.2 fallback, v0.3 relative paths and unknown-version verdicts", async () => {
+        const index = this.app.vault.getAbstractFileByPath("index.md"), calc = this.app.vault.getAbstractFileByPath("nested/path-contract.md");
+        assert(index instanceof TFile && calc instanceof TFile, "Missing version controls");
+        const original = await this.app.vault.read(index), authored = await this.app.vault.read(calc);
+        assert(original.includes("okf_version: '0.3'"), "Expected exact fixture declaration");
+        try {
+          await this.app.workspace.getLeaf(false).openFile(calc); await settled();
+          for (const [v, verdict, clue] of [["0.3", "conformant", "not found"], ["0.2", "conformant", "legacy root fallback"], ["9.9", "unknown", "Unsupported okf_version"]]) {
+            if (v !== "0.3") await this.app.vault.modify(index, original.replace("okf_version: '0.3'", `okf_version: '${v}'`));
+            await host().validateActive(calc, false); await settled();
+            const a = host().activeResult; assert(a?.path === calc.path && a.conformance === verdict, `Wrong active verdict for ${v}`);
+            assert(a.issues.some((i: any) => !i.providerId && i.message.includes(clue)), `Missing ${v} diagnostic: ${clue}`);
+            await host().scanVault(false, true);
+            const view = this.app.workspace.getLeavesOfType("okf-report-view")[0]?.view as any;
+            assert(view.results.find((r: any) => r.path === calc.path)?.issues.some((i: any) => !i.providerId && i.message.includes(clue)), `Scan disagrees for ${v}`);
+            if (v === "9.9") assert(host().lastSummary.conformance === "unknown", "Unsupported version was certified");
+          }
+          assert(await this.app.vault.read(calc) === authored, "Legacy path was silently migrated");
+        } finally {
+          await this.app.vault.modify(index, original); assert(await this.app.vault.read(index) === original, "Root restoration failed");
+          await this.app.workspace.getLeaf(false).openFile(clean); await host().validateActive(clean, false); await settled();
+        }
+      }, "temporary fixture-root version declarations, then exact restoration");
       await test("intentional save edit reruns the same extension policy", async () => {
         await settled();
         assert(host().activeResult?.issues.some((i: any) => i.providerId === "fixture/owner"), "Save control must start with an owner finding");
@@ -251,11 +282,19 @@ export default class E2EConsumer extends Plugin {
         } finally { await this.app.vault.modify(clean, original); host().settings.liveCheckOnSave = false; await host().validateActive(clean, false); }
       }, "intentional clean.md owner edit, then exact restoration");
       await test("intentional core fix keeps unresolved extension findings", async () => {
+        const readme = this.app.vault.getAbstractFileByPath("broken.md"); assert(readme instanceof TFile, "Missing non-concept control");
+        const before = await this.app.vault.read(readme);
+        assert(await host().fixFile(readme, false) === 0 && await this.app.vault.read(readme) === before, "Fix converted non-concept Markdown");
         const fix = this.app.vault.getAbstractFileByPath("fix-me.md"); assert(fix instanceof TFile, "Missing fix fixture");
         await this.app.workspace.getLeaf(false).openFile(fix);
-        assert(await host().fixFile(fix, false) > 0, "Core fix did not write fixture");
-        assert(host().activeResult?.conformance === "conformant", "Core fix failed conformance");
-        assert(host().activeResult.issues.some((i: any) => i.providerId === "fixture/owner" && !i.fix), "Post-fix policy disappeared or gained a fix");
+        const previous = host().settings.warnMissingFields; host().settings.warnMissingFields = ["title"];
+        try {
+          assert(await host().fixFile(fix, false) === 1, "Core fix should add exactly the missing title");
+          const written = await this.app.vault.read(fix);
+          assert(written.includes('title: "fix-me"') && written.includes('x-author: {untouched: true}'), "Fix lost authored YAML or failed to add title");
+          assert(host().activeResult?.conformance === "conformant", "Core fix failed conformance");
+          assert(host().activeResult.issues.some((i: any) => i.providerId === "fixture/owner" && !i.fix), "Post-fix policy disappeared or gained a fix");
+        } finally { host().settings.warnMissingFields = previous; }
       }, "explicit core fixer on fix-me.md");
       await test("intentional index command still writes a disposable missing index", async () => {
         const folder = this.app.vault.getAbstractFileByPath("gap");
