@@ -2,6 +2,6 @@
   "id": "okf-enforcer",
   "name": "OKF Enforcer",
   "author": "MartinForReal",
-  "description": "Validate and enforce the Open Knowledge Format (OKF v0.2) in your vault.",
+  "description": "Validate Open Knowledge Format v0.3 bundles and compatible legacy vaults.",
   "repo": "MartinForReal/okf-enforcer"
 }

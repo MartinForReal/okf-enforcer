@@ -40,7 +40,12 @@ function startFixture(t: TestContext, excludeFolders = ["assets", "Templates"], 
     read, cachedRead: read, create: async (path: string, value: string) => {
       assert.ok(!nodes.has(path), `File already exists: ${path}`); writes.push(path);
       const created = file(path, value); emit("create", created); return created;
-    }, modify: async (f: TFile, value: string) => { writes.push(f.path); text.set(f.path, value); emit("modify", f); } },
+    }, modify: async (f: TFile, value: string) => { writes.push(f.path); text.set(f.path, value); emit("modify", f); },
+    process: async (f: TFile, update: (current: string) => string) => {
+      const before = text.get(f.path)!, after = update(before);
+      if (after !== before) { writes.push(f.path); text.set(f.path, after); emit("modify", f); }
+      return after;
+    } },
     workspace: { on: () => ({ off() {} }), onLayoutReady: (cb: () => void) => cb(), trigger: (name: string) => { if (name === VALIDATORS_READY) ready(); },
       getActiveFile: () => active, getLeavesOfType: () => [] }, metadataCache: { getFileCache: () => ({}) },
     fileManager: { processFrontMatter: async (f: TFile) => { writes.push(f.path); } },
@@ -119,6 +124,8 @@ test("automatic indexing ignores excluded events and refreshes the included side
   const tick = async (ms: number) => { t.mock.timers.tick(ms); await new Promise<void>((r) => setImmediate(r)); };
   plugin.settings.fixOnSave = true;
   const note = file("docs/assets/deep/moved.md", "Do not fix or index me");
+  const dotNote = file("docs/.workspace.md", "Hidden note");
+  emit("modify", dotNote); emit("delete", dotNote); emit("rename", dotNote, "docs/.old.md");
   emit("create", folder("docs/assets/deep")); emit("create", note); emit("modify", note);
   emit("delete", folder("docs/Templates")); emit("rename", folder("docs/assets"), "old/assets");
   await tick(500); await tick(1500);

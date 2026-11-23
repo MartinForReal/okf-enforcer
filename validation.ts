@@ -3,6 +3,7 @@ import type { ApiErrorCode } from "./api";
 import type { ApiDiagnostic, CheckCoverage, Conformance, ContentReport, ContentRequest, ReportMetadata } from "./validation-types";
 import { OKF_VERSION, validateContent, type OkfIssue, type OkfSettings } from "./validator";
 import { PORTENT_TYPES, PORTENT_STATUSES } from "./portent";
+import { dotPath } from "./frontmatter";
 
 export interface EvaluationContext { pluginVersion: string; now: Date }
 
@@ -21,14 +22,14 @@ export function snapshotSettings(settings: OkfSettings): OkfSettings {
 }
 
 export function reportMetadata(settings: OkfSettings, context: EvaluationContext): ReportMetadata {
-  const disabledErrorChecks = settings.checkAttestedComputation ? [] : ["checkAttestedComputation"];
   return {
     apiVersion: 1,
     pluginVersion: context.pluginVersion,
     okfVersion: OKF_VERSION,
     evaluatedAt: context.now.toISOString(),
-    checkCoverage: disabledErrorChecks.length ? "reduced" : "full",
-    disabledErrorChecks,
+    // §11.1 structural checks are always enabled. §10 is contract advice.
+    checkCoverage: "full",
+    disabledErrorChecks: [],
     enabledChecks: {
       structure: true,
       checkAttestedComputation: settings.checkAttestedComputation,
@@ -65,7 +66,7 @@ export function publicDiagnostics(issues: readonly OkfIssue[]): ApiDiagnostic[] 
 }
 
 export function conformanceFor(issues: readonly OkfIssue[], coverage: CheckCoverage, complete = true): Conformance {
-  if (!complete || coverage !== "full") return "unknown";
+  if (!complete || coverage !== "full" || issues.some(i => !i.providerId && i.unknownVersion)) return "unknown";
   return issues.some((issue) => issue.severity === "error" && !issue.providerId && !issue.rule.startsWith("portent/"))
     ? "non-conformant" : "conformant";
 }
@@ -73,10 +74,10 @@ export function conformanceFor(issues: readonly OkfIssue[], coverage: CheckCover
 export function validateProvidedContent(input: ContentRequest, settings: OkfSettings, context: EvaluationContext): ContentReport {
   if (!input || typeof input !== "object" || Array.isArray(input) ||
       typeof input.path !== "string" || typeof input.content !== "string" ||
-      !input.path.endsWith(".md") || /^[A-Za-z]:/.test(input.path) ||
+      !input.path.endsWith(".md") || dotPath(input.path) || /^[A-Za-z]:/.test(input.path) ||
       input.path.includes("\\") || Array.from(input.path).some((character) => character.charCodeAt(0) < 0x20) ||
       input.path.split("/").some((part) => !part || part === "." || part === "..")) {
-    throw apiError("invalid-request", "Expected Markdown content and a vault-relative .md path without absolute paths, backslashes or dot segments.");
+    throw apiError("invalid-request", "Expected Markdown content and an in-bundle .md path without absolute, hidden or dot segments or backslashes.");
   }
   const metadata = reportMetadata(settings, context);
   const issues = validateContent(input.path, input.content, !input.path.includes("/"), settings, context.now);

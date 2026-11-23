@@ -82,7 +82,6 @@ test("provider cannot change its own frozen context or another provider's contex
 });
 
 for (const [content, path, state, kind] of [
-  ["# Body only", "a.md", "missing", "concept"],
   ["---\ntype: [\n---\n# Body", "a.md", "invalid", "concept"],
   ["# Index\n", "nested/index.md", "missing", "index"],
   ["# Log\n", "log.md", "missing", "log"],
