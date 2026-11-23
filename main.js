@@ -1081,7 +1081,17 @@ function hasNonEmpty2(data, key) {
   if (Array.isArray(v)) return v.length > 0;
   return true;
 }
+function yamlString(value) {
+  return JSON.stringify(value).replace(
+    /[\u007f-\u009f\u2028\u2029\ufffe\uffff]/g,
+    (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`
+  );
+}
+function generatedLines(actor, atYaml) {
+  return ["generated:", `  by: ${yamlString(actor)}`, atYaml ? `  at: ${atYaml}` : "  at:"];
+}
 function applyFixes(path, content, issues, settings, includeMigrations = false) {
+  var _a, _b, _c, _d;
   const applied = [];
   const MIGRATIONS = ["migrate-timestamp", "migrate-citations"];
   const fixes = new Set(
@@ -1090,62 +1100,102 @@ function applyFixes(path, content, issues, settings, includeMigrations = false) 
     )
   );
   if (fixes.size === 0) return { content, applied };
-  const nowIso = (/* @__PURE__ */ new Date()).toISOString().replace(/\.\d{3}Z$/, "Z");
+  const nowYaml = yamlString((/* @__PURE__ */ new Date()).toISOString().replace(/\.\d{3}Z$/, "Z"));
   const actor = settings.defaultActor || "okf-enforcer/0.6";
   const title = basename(path);
   const split = splitFrontmatter(content);
+  const eol = (_b = (_a = content.match(/\r?\n/)) == null ? void 0 : _a[0]) != null ? _b : "\n";
   if (!split.hasFm) {
     const lines = [
-      `type: ${settings.defaultType}`,
-      `title: ${title}`,
-      `generated: { by: ${actor}, at: ${nowIso} }`
+      `type: ${yamlString(settings.defaultType)}`,
+      `title: ${yamlString(title)}`,
+      ...generatedLines(actor, nowYaml)
     ];
-    const fm = `---
-${lines.join("\n")}
----
-
-`;
+    const fm = ["---", ...lines, "---", "", ""].join(eol);
     applied.push("added frontmatter (type, title, generated)");
-    return { content: fm + content.replace(/^\s+/, ""), applied };
+    return { content: fm + content, applied };
   }
-  const fmLines = split.raw.split(/\r?\n/);
+  const header = content.slice(3 + eol.length, content.length - split.body.length - 3);
+  const fmLines = (_c = header.match(/[^\n]*\n/g)) != null ? _c : [];
+  const firstKey = (_d = fmLines.find((text) => text.trim() && !text.trimStart().startsWith("#"))) != null ? _d : "";
+  if (firstKey.trimStart().startsWith("{")) return { content, applied };
+  const indent = firstKey.match(/^ */)[0];
+  const line = (text) => `${indent}${text}${eol}`;
   let body = split.body;
-  const hasKey = (k) => fmLines.some((l) => new RegExp(`^${k}\\s*:`).test(l.trim()));
+  const keyPattern = (k) => new RegExp(`^${indent}(?:${k}|"${k}"|'${k}')[ \\t]*:(?=[ \\t\\r\\n])`);
+  const keyIndex = (k) => {
+    const pattern = keyPattern(k);
+    return fmLines.findIndex((text) => pattern.test(text));
+  };
+  const hasKey = (k) => keyIndex(k) !== -1;
   if (fixes.has("add-type") && !hasKey("type")) {
-    fmLines.unshift(`type: ${settings.defaultType}`);
+    fmLines.unshift(line(`type: ${yamlString(settings.defaultType)}`));
     applied.push(`added type: ${settings.defaultType}`);
   }
   if (fixes.has("add-title") && !hasKey("title")) {
-    fmLines.push(`title: ${title}`);
+    fmLines.push(line(`title: ${yamlString(title)}`));
     applied.push("added title");
   }
   if (fixes.has("add-generated") && !hasKey("generated")) {
-    fmLines.push(`generated: { by: ${actor}, at: ${nowIso} }`);
+    fmLines.push(...generatedLines(actor, nowYaml).map(line));
     applied.push("added generated");
   }
-  if (fixes.has("migrate-timestamp") && hasKey("timestamp") && !hasKey("generated")) {
-    for (let i = 0; i < fmLines.length; i++) {
-      const m = fmLines[i].match(/^(\s*)timestamp\s*:\s*(.+?)\s*$/);
-      if (m) {
-        const at = m[2].replace(/^["']|["']$/g, "");
-        fmLines[i] = `${m[1]}generated: { by: ${actor}, at: ${at} }`;
-        applied.push("migrated timestamp \u2192 generated");
-        break;
+  if (fixes.has("migrate-timestamp") && !hasKey("generated")) {
+    const i = keyIndex("timestamp");
+    if (i !== -1) {
+      let at = fmLines[i].replace(keyPattern("timestamp"), "").replace(/^[ \t]+|\r?\n$/g, "");
+      const properties = /^(?:[&!]\S+(?:[ \t]+|$))*/;
+      let scalarStart = at.replace(properties, "");
+      let explicitlyTagged = /!/.test(at.match(properties)[0]);
+      for (let j = i + 1; (!scalarStart || scalarStart.startsWith("#")) && j < fmLines.length; j++) {
+        const text = fmLines[j].trim();
+        if (!text || text.startsWith("#")) continue;
+        if (!fmLines[j].startsWith(indent + " ")) break;
+        explicitlyTagged || (explicitlyTagged = /!/.test(text.match(properties)[0]));
+        scalarStart = text.replace(properties, "");
       }
+      const blockScalar = /^[|>]/.test(scalarStart);
+      const openQuote = /^(?:"(?:[^"\\]|\\.)*\\?|'(?:[^']|'')*)$/.test(scalarStart);
+      let end = i + 1;
+      for (let j = end; j < fmLines.length; j++) {
+        const next = fmLines[j];
+        if (!next.trim()) {
+          if (blockScalar && next.startsWith(indent + " ")) end = j + 1;
+          continue;
+        }
+        if (!next.startsWith(indent + " ")) {
+          if (next.trimStart().startsWith("#")) continue;
+          break;
+        }
+        if (!next.trimStart().startsWith("#") || blockScalar || openQuote) end = j + 1;
+      }
+      if (end === i + 1) {
+        at = at.replace(
+          /^((?:&\S+[ \t]+)?)(\d{4}-\d\d?-\d\d?.*?)([ \t]+#.*|[ \t]*)$/,
+          (_, anchor, value, tail) => anchor + yamlString(value) + tail
+        );
+      } else {
+        if (/^\d{4}-\d\d?-\d\d?/.test(scalarStart) && !explicitlyTagged) {
+          at = at ? `!!str ${at}` : "!!str";
+        }
+        for (let j = i + 1; j < end; j++) {
+          if (fmLines[j].startsWith(indent + " ")) fmLines[j] = "  " + fmLines[j];
+        }
+      }
+      fmLines.splice(i, 1, ...generatedLines(actor, at).map(line));
+      applied.push("migrated timestamp \u2192 generated");
     }
   }
   if (fixes.has("migrate-citations") && !hasKey("sources")) {
     const migrated = migrateCitations(body);
     if (migrated) {
       body = migrated.body;
-      fmLines.push("sources:");
-      for (const r of migrated.resources) fmLines.push(`  - resource: ${r}`);
+      fmLines.push(line("sources:"));
+      for (const r of migrated.resources) fmLines.push(line(`  - resource: ${r}`));
       applied.push(`migrated # Citations \u2192 sources (${migrated.resources.length})`);
     }
   }
-  const rebuilt = `---
-${fmLines.join("\n")}
----${body}`;
+  const rebuilt = `---${eol}${fmLines.join("")}---${body}`;
   return { content: rebuilt, applied };
 }
 function migrateCitations(body) {
@@ -3130,7 +3180,7 @@ var OkfSettingTab = class extends import_obsidian4.PluginSettingTab {
       },
       {
         name: "Default actor for `generated.by`",
-        desc: "Actor written when auto-fix adds a `generated` block (\xA77). Use `<producer>/<version>` (e.g. `okf-enforcer/0.6`) or `human:<id>`. Avoid commas \u2014 the block is written as inline YAML.",
+        desc: "Actor written to `generated.by` when auto-fix adds provenance (\xA77). Use `<producer>/<version>` (e.g. `okf-enforcer/0.6`) or `human:<id>`.",
         control: (row) => row.addText(
           (t) => t.setValue(s.defaultActor).onChange((v) => {
             s.defaultActor = v.trim() || "okf-enforcer/0.6";

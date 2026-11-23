@@ -1400,7 +1400,7 @@ class OkfSettingTab extends PluginSettingTab {
       },
       {
         name: "Default actor for `generated.by`",
-        desc: "Actor written when auto-fix adds a `generated` block (§7). Use `<producer>/<version>` (e.g. `okf-enforcer/0.6`) or `human:<id>`. Avoid commas — the block is written as inline YAML.",
+        desc: "Actor written to `generated.by` when auto-fix adds provenance (§7). Use `<producer>/<version>` (e.g. `okf-enforcer/0.6`) or `human:<id>`.",
         control: (row) =>
           row.addText((t) =>
             t.setValue(s.defaultActor).onChange((v) => {
