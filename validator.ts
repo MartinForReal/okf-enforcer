@@ -1,24 +1,16 @@
-// validator.ts — OKF v0.2 conformance engine
-// Spec: GoogleCloudPlatform/open-knowledge-format/SPEC.md (v0.2)
-// Targets v0.2 with v0.1 back-compat: a legacy `timestamp` is read as a
-// fallback for `generated.at`, and a legacy `# Citations` body list is
-// recognized as a fallback for `sources` (SPEC §13).
-
-import { parseYaml } from "obsidian";
-import {
-  PortentSettings,
-  PORTENT_DEFAULTS,
-  validatePortent,
-} from "./portent";
-
-/** The OKF spec version this engine targets. */
-export const OKF_VERSION = "0.2";
-/** Versions a bundle may declare in its root index.md `okf_version` (§12). */
-export const OKF_KNOWN_VERSIONS = ["0.1", "0.2"] as const;
+// OKF v0.3 validation and index maintenance. SPEC pin and compatibility: see README.
+import { PortentSettings, PORTENT_DEFAULTS, validatePortent } from "./portent";
+import { instant, trustTier, validateSignals } from "./signals";
+import { citationsHeading, indexLinks, localTarget, logHeadings, validateReferences } from "./references";
+import { absent, dotPath, items, legacy, OKF_KNOWN_VERSIONS, readFrontmatter, splitFrontmatter, supported, text, type BundleContext } from "./frontmatter";
+export { OKF_KNOWN_VERSIONS, OKF_VERSION, splitFrontmatter } from "./frontmatter";
+export { isStale, normalizeVerified, OKF_STATUSES, trustTier } from "./signals";
 
 export type Severity = "error" | "warning";
 
 export interface OkfIssue {
+  /** Best-effort read, not a verdict for a version this engine doesn't know. */
+  unknownVersion?: boolean;
   severity: Severity;
   rule: string;
   message: string;
@@ -39,16 +31,6 @@ export type FixKind =
   | "migrate-timestamp"
   | "migrate-citations";
 
-/** OKF v0.2 lifecycle values for `status` (§5.4). Absent ⇒ `stable`. */
-export const OKF_STATUSES = ["draft", "stable", "deprecated"] as const;
-
-/**
- * Actor convention (§7): `<producer>/<version>`, `human:<id>`, or
- * `process:<id>`. Used by `generated.by` and `verified[].by`. Trust tiers key
- * off the `human:` prefix, so the shape matters.
- */
-const ACTOR_RE = /^(human:.+|process:.+|[^/\s]+\/[^/\s]+)$/;
-const ISO_DATETIME_RE = /^\d{4}-\d{2}-\d{2}T/;
 
 /**
  * Plugin settings: the OKF core plus the composed Portent layer (see
@@ -73,7 +55,7 @@ export interface OkfSettings extends PortentSettings {
    */
   warnMissingFields: string[];
   /**
-   * Validate the v0.2 trust/lifecycle families when present: `verified`
+   * Validate the optional trust/lifecycle families when present: `verified`
    * shape + actors, `status` vocabulary, `stale_after` date form (§5.2–§5.5).
    * Advisory — off by default so vaults not using these fields stay quiet.
    */
@@ -127,13 +109,6 @@ export interface OkfSettings extends PortentSettings {
    * here is written.
    */
   reportIndexGaps: boolean;
-  /**
-   * Let ordinary auto-fix (including fix-on-save) also apply the v0.1→v0.2
-   * migrations — rename `timestamp`→`generated`, lift `# Citations`→`sources`.
-   * On by default. Turn off to keep migrations manual (only via the explicit
-   * "Migrate note to OKF v0.2" command), since they rewrite existing content.
-   */
-  autoMigrateOnFix: boolean;
   batchSize: number;
   excludeFolders: string[];
 }
@@ -144,8 +119,7 @@ export const WARNABLE_FIELDS = ["title", "description", "generated", "tags"] as 
 export const DEFAULT_SETTINGS: OkfSettings = {
   defaultType: "Concept",
   defaultActor: "okf-enforcer/0.6",
-  // `tags` left out: §4.1 recommends the other three, and the spec never asks
-  // for tags.
+  // Optional authoring preferences; none of these are conformance requirements.
   warnMissingFields: ["title", "description", "generated"],
   warnTrustFields: false,
   checkAttestedComputation: true,
@@ -157,82 +131,17 @@ export const DEFAULT_SETTINGS: OkfSettings = {
   overwriteExistingIndex: false,
   indexSubdirDescSection: "",
   reportIndexGaps: false,
-  autoMigrateOnFix: true,
   batchSize: 50,
   excludeFolders: ["Templates"],
   ...PORTENT_DEFAULTS,
 };
 
-const FM_RE = /^---\r?\n([\s\S]*?)\r?\n---/;
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-/**
- * The `verified` events as a list (§5.2). A single verifier MAY be written as a
- * bare `{ by, at }` mapping without the list dash; consumers MUST treat it as a
- * one-element list.
- */
-export function normalizeVerified(
-  data: Record<string, unknown>
-): Record<string, unknown>[] {
-  const v = data["verified"];
-  if (v === undefined || v === null) return [];
-  if (Array.isArray(v)) return v.filter((e) => e && typeof e === "object") as Record<string, unknown>[];
-  if (typeof v === "object") return [v as Record<string, unknown>];
-  return [];
-}
-
-/**
- * Trust tier derived from `verified` (§5.3), lowest to highest:
- * no `verified` ⇒ "unverified"; only non-`human:` actors ⇒ "machine-confirmed";
- * any `human:<id>` actor ⇒ "human-reviewed".
- */
-export function trustTier(
-  data: Record<string, unknown>
-): "unverified" | "machine-confirmed" | "human-reviewed" {
-  const events = normalizeVerified(data);
-  if (events.length === 0) return "unverified";
-  for (const e of events) {
-    if (String(e["by"] ?? "").startsWith("human:")) return "human-reviewed";
-  }
-  return "machine-confirmed";
-}
-
-/**
- * Trust tier of a note's frontmatter, or null when it has none we can read.
- * A convenience for callers holding raw file content rather than parsed
- * frontmatter; unparseable YAML is reported by `validateContent`, so here it
- * just means "no tier to show".
- */
-export function trustTierOfContent(
-  content: string
-): "unverified" | "machine-confirmed" | "human-reviewed" | null {
-  const { hasFm, raw } = splitFrontmatter(content);
-  if (!hasFm) return null;
-  try {
-    const parsed: unknown = parseYaml(raw);
-    if (parsed && typeof parsed === "object") {
-      return trustTier(parsed as Record<string, unknown>);
-    }
-  } catch {
-    return null;
-  }
-  return null;
-}
-
-/**
- * Whether a concept is stale per `stale_after` (§5.5): stale when
- * `today >= stale_after`. False when absent or unparseable.
- */
-export function isStale(
-  data: Record<string, unknown>,
-  today: Date = new Date()
-): boolean {
-  const raw = data["stale_after"];
-  if (!raw) return false;
-  const s = String(raw).slice(0, 10);
-  if (!ISO_DATE_RE.test(s)) return false;
-  const t = today.toISOString().slice(0, 10);
-  return t >= s;
+/** Active-note tooltip only; malformed or untyped Markdown has no trust tier. */
+export function trustTierOfContent(content: string, version?: string) {
+  const { data } = readFrontmatter(content);
+  return data && text(data.type) ? trustTier(data, version) : null;
 }
 
 export function basename(path: string): string {
@@ -251,25 +160,18 @@ export function parentPath(path: string): string {
 }
 
 export function isReserved(path: string): "index" | "log" | null {
-  const f = (path.split("/").pop() || "").toLowerCase();
+  const f = path.split("/").pop();
   if (f === "index.md") return "index";
   if (f === "log.md") return "log";
   return null;
 }
 
 export function isExcluded(path: string, settings: OkfSettings): boolean {
-  return settings.excludeFolders.some(
+  return dotPath(path) || settings.excludeFolders.some(
     (folder) => folder && (path === folder || path.startsWith(folder + "/"))
   );
 }
 
-export function splitFrontmatter(
-  content: string
-): { hasFm: boolean; raw: string; body: string } {
-  const m = content.match(FM_RE);
-  if (!m) return { hasFm: false, raw: "", body: content };
-  return { hasFm: true, raw: m[1], body: content.slice(m[0].length) };
-}
 
 /**
  * One-line summary: collapse whitespace and clip, so a multi-line
@@ -608,9 +510,8 @@ function sameTarget(a: string, b: string): boolean {
  */
 function pathKey(path: string): string {
   return decodePath(path)
-    .replace(/\/index\.md$/i, "")
-    .replace(/\/+$/, "")
-    .toLowerCase();
+    .replace(/\/index\.md$/, "")
+    .replace(/\/+$/, "");
 }
 
 /** The same, for a whole destination — title trailer and fragment removed. */
@@ -723,7 +624,7 @@ function isOwnEntry(target: string): boolean {
   const parts = target.replace(/\/+$/, "").split("/");
   if (parts.some((p) => p === "" || p === "." || p === "..")) return false;
   if (parts.length === 1) return true;
-  return parts.length === 2 && parts[1].toLowerCase() === "index.md";
+  return parts.length === 2 && parts[1] === "index.md";
 }
 
 /**
@@ -745,7 +646,8 @@ function isOwnEntry(target: string): boolean {
 function mergeIndexParts(
   existing: string,
   entries: IndexEntry[],
-  exists?: (target: string) => boolean
+  exists?: (target: string) => boolean,
+  indexPath = "index.md"
 ): { text: string; unlisted: IndexEntry[] } {
   const { body } = splitFrontmatter(existing);
   const prefix = existing.slice(0, existing.length - body.length);
@@ -756,6 +658,13 @@ function mergeIndexParts(
   for (const e of entries) canonical.set(linkKey(e.link), e.link);
 
   const listed = new Set<string>();
+  // Equivalent absolute, relative and reference-style links already list a
+  // child. Do not rewrite the author's chosen spelling or fold filename case.
+  const children = new Map(entries.map(e => [localTarget(indexPath, e.link), linkKey(e.link)]));
+  for (const ref of indexLinks(body)) {
+    const target = localTarget(indexPath, ref), key = target === null ? undefined : children.get(target);
+    if (key !== undefined) listed.add(key);
+  }
   const stale: number[] = [];
   const emptied = new Set<string>();
   const fenced = fencedLines(lines);
@@ -915,9 +824,9 @@ function mergeIndexParts(
 export function mergeIndex(
   existing: string,
   entries: IndexEntry[],
-  exists?: (target: string) => boolean
+  exists?: (target: string) => boolean, indexPath = "index.md"
 ): string {
-  return mergeIndexParts(existing, entries, exists).text;
+  return mergeIndexParts(existing, entries, exists, indexPath).text;
 }
 
 /**
@@ -930,9 +839,9 @@ export function mergeIndex(
 export function unlistedEntries(
   existing: string,
   entries: IndexEntry[],
-  exists?: (target: string) => boolean
+  exists?: (target: string) => boolean, indexPath = "index.md"
 ): IndexEntry[] {
-  return mergeIndexParts(existing, entries, exists).unlisted;
+  return mergeIndexParts(existing, entries, exists, indexPath).unlisted;
 }
 
 /** Whether a fence is still open when the document runs out of lines. */
@@ -1010,83 +919,34 @@ function appendToSection(
 }
 
 export function validateContent(
-  path: string,
-  content: string,
-  isRoot: boolean,
-  settings: OkfSettings,
-  today: Date = new Date()
+  path: string, content: string, isRoot: boolean, settings: OkfSettings,
+  today: Date = new Date(), bundle: BundleContext = {}, fm = readFrontmatter(content)
 ): OkfIssue[] {
+  if (dotPath(path) || !path.endsWith(".md")) return [];
   const reserved = isReserved(path);
-  if (reserved === "index") return validateIndex(content, isRoot);
-  if (reserved === "log") return validateLog(content);
-  return validateConcept(path, content, settings, today);
+  if (isRoot && reserved === "index") bundle = { ...bundle, version: fm.version, unreadableRoot: false };
+  const issues: OkfIssue[] = [];
+  if (!supported(bundle)) issues.push({ severity: "warning", rule: "§12", unknownVersion: true,
+    message: bundle.unreadableRoot ? "Cannot determine the bundle version: root index unreadable." :
+      `Unsupported okf_version ${bundle.version}; best-effort checks only (known: ${OKF_KNOWN_VERSIONS.join(", ")}).` });
+  if (fm.error) return [...issues, { severity: "error", rule: "§4", message: `Invalid YAML frontmatter: ${fm.error}` }];
+  if (reserved) issues.push(...validateReferences(path, {}, fm.body, bundle, false));
+  if (reserved === "index") return [...issues, ...validateIndex(fm, isRoot, bundle)];
+  if (reserved === "log") {
+    const ambiguous = !!bundle.observed && bundle.version === undefined && fm.data?.type === "Log";
+    return [...issues, ...validateLog(fm, legacy(bundle.version), ambiguous)];
+  }
+  if (!text(fm.data?.type)) {
+    // Even in a declared legacy bundle, the validator does not decide that a README should become a concept.
+    issues.push({ severity: legacy(bundle.version) ? "error" : "warning", rule: "§3.2",
+      message: `Not a concept: ${fm.hasFm ? "no non-empty string type" : "no frontmatter"}.` });
+    return issues;
+  }
+  return [...issues, ...validateConcept(fm.data!, fm.body, path, settings, today, bundle)];
 }
 
-function validateConcept(
-  path: string,
-  content: string,
-  settings: OkfSettings,
-  today: Date
-): OkfIssue[] {
+function validateConcept(data: Record<string, unknown>, content: string, path: string, settings: OkfSettings, today: Date, bundle: BundleContext): OkfIssue[] {
   const issues: OkfIssue[] = [];
-  const { hasFm, raw } = splitFrontmatter(content);
-
-  if (!hasFm) {
-    issues.push({
-      severity: "error",
-      rule: "§11",
-      message:
-        "No YAML frontmatter block. Every OKF concept must begin with a `---` delimited frontmatter block.",
-      fix: "add-frontmatter",
-    });
-    return issues;
-  }
-
-  let data: Record<string, unknown> = {};
-  try {
-    const parsed: unknown = parseYaml(raw);
-    if (parsed && typeof parsed === "object") {
-      data = parsed as Record<string, unknown>;
-    }
-  } catch (e) {
-    issues.push({
-      severity: "error",
-      rule: "§11",
-      message: `Frontmatter is not parseable YAML: ${
-        (e as Error).message || e
-      }`,
-    });
-    return issues;
-  }
-
-  const type = data["type"];
-  const typeOk = typeof type === "string" && type.trim().length > 0;
-  if (!typeOk) {
-    // OKF §4.1 defines `type` as a single short string, and §11 makes a
-    // non-empty `type` the only always-required key. Distinguish the failure
-    // modes so the message is actionable, and only offer the insert-a-value
-    // auto-fix when we can apply it safely (field absent or an empty string).
-    // A list or other non-string value must be resolved by the author — we
-    // never silently discard their data.
-    const issue: OkfIssue = {
-      severity: "error",
-      rule: "§11",
-      message:
-        "`type` field is present but empty. It must be a non-empty string.",
-    };
-    if (type === undefined) {
-      issue.message = "Missing required `type` field.";
-      issue.fix = "add-type";
-    } else if (Array.isArray(type)) {
-      issue.message =
-        "`type` must be a single string, not a list (OKF §4.1 — only `tags` is list-valued).";
-    } else if (typeof type !== "string") {
-      issue.message = "`type` must be a non-empty string (OKF §4.1).";
-    } else {
-      issue.fix = "add-type";
-    }
-    issues.push(issue);
-  }
 
   const warnFor = new Set(settings.warnMissingFields);
   if (warnFor.has("title") && !hasNonEmpty(data, "title")) {
@@ -1094,7 +954,7 @@ function validateConcept(
       severity: "warning",
       rule: "§4.1",
       message:
-        "Recommended `title` missing. Consumers may fall back to the filename.",
+        "Optional title missing. Consumers may fall back to the filename.",
       fix: "add-title",
     });
   }
@@ -1103,90 +963,36 @@ function validateConcept(
       severity: "warning",
       rule: "§4.1",
       message:
-        "Recommended `description` (one-line summary) missing. Used in index listings, search snippets, and previews.",
+        "Optional description missing. Index listings and previews can use a one-line summary.",
     });
   }
-  if (warnFor.has("generated")) {
-    // §5.2: `generated: { by, at }` records how the current content was
-    // produced and when it last meaningfully changed, superseding v0.1's
-    // `timestamp`. A legacy `timestamp` is accepted as a fallback (§13.1) and
-    // surfaces a migrate hint rather than a "missing" warning.
-    const generated = data["generated"];
-    const hasGenerated = generated !== null && typeof generated === "object";
-    const legacyTs = data["timestamp"];
-    const hasLegacyTs = typeof legacyTs === "string" && legacyTs.length > 0;
-    if (hasGenerated) {
-      const g = generated as Record<string, unknown>;
-      if (!hasNonEmpty(g, "by")) {
-        issues.push({
-          severity: "warning",
-          rule: "§5.2",
-          message: "`generated.by` (an actor) is required within `generated`.",
-        });
-      } else if (!ACTOR_RE.test(String(g["by"]).trim())) {
-        issues.push({
-          severity: "warning",
-          rule: "§7",
-          message:
-            "`generated.by` should follow the actor convention: `<producer>/<version>`, `human:<id>`, or `process:<id>`.",
-        });
-      }
-      if (g["at"] !== undefined && !ISO_DATETIME_RE.test(String(g["at"]))) {
-        issues.push({
-          severity: "warning",
-          rule: "§5.2",
-          message: "`generated.at` is not a parseable ISO 8601 datetime.",
-        });
-      }
-    } else if (hasLegacyTs) {
-      issues.push({
-        severity: "warning",
-        rule: "§13.1",
-        message:
-          "Legacy `timestamp` found. OKF v0.2 records this as `generated: { by, at }` — run \"Migrate note to OKF v0.2\".",
-        fix: "migrate-timestamp",
-      });
-    } else {
-      issues.push({
-        severity: "warning",
-        rule: "§5.2",
-        message:
-          "Recommended `generated: { by, at }` missing (records who produced the content and when).",
-        fix: "add-generated",
-      });
-    }
+  const allowLegacy = bundle.version === undefined || legacy(bundle.version);
+  if (allowLegacy && absent(data.generated) && !absent(data.timestamp)) {
+    issues.push({ severity: "warning", rule: "Appendix B", message: "Legacy timestamp; use the explicit legacy-field migration if desired.", fix: "migrate-timestamp" });
+  } else if (warnFor.has("generated") && absent(data.generated)) {
+    issues.push({ severity: "warning", rule: "§5.2", message: "Optional generated field is missing.",
+      // Do not invent a last-change date and thereby invalidate existing verification history.
+      ...(absent(data.verified) && absent(data.timestamp) ? { fix: "add-generated" as const } : {}) });
   }
+  if (settings.warnTrustFields || warnFor.has("generated")) issues.push(...validateSignals(data, today, !settings.warnTrustFields));
 
-  if (warnFor.has("tags") && !("tags" in data)) {
+  if (items(data.tags).some(tag => !text(tag))) {
+    issues.push({ severity: "warning", rule: "§4.1", message: "tags should contain strings; a scalar string is one tag." });
+  }
+  if (warnFor.has("tags") && absent(data.tags)) {
     issues.push({
       severity: "warning",
       rule: "§4.1",
-      message: "Recommended `tags` list missing.",
+      message: "Optional tags missing.",
     });
   }
 
-  // §13.1: the v0.1 body `# Citations` list is superseded by `sources`.
-  if (/^#{1,6}\s+Citations\s*$/m.test(content) && !("sources" in data)) {
-    issues.push({
-      severity: "warning",
-      rule: "§13.1",
-      message:
-        "Legacy `# Citations` section found. OKF v0.2 records provenance in the `sources` frontmatter field — run \"Migrate note to OKF v0.2\".",
-      fix: "migrate-citations",
-    });
+  if (allowLegacy && !("sources" in data) && citationsHeading(content) !== undefined) {
+    issues.push({ severity: "warning", rule: "Appendix B", message: "Legacy Citations section; migrate only if desired.",
+      ...(migrateCitations(content) ? { fix: "migrate-citations" as const } : {}) });
   }
 
-  if (settings.warnTrustFields) {
-    issues.push(...validateTrustFamilies(data, today));
-  }
-
-  if (
-    settings.checkAttestedComputation &&
-    typeof type === "string" &&
-    type.trim() === "Attested Computation"
-  ) {
-    issues.push(...validateAttestedComputation(data, content));
-  }
+  issues.push(...validateReferences(path, data, content, bundle, settings.checkAttestedComputation));
 
   if (settings.enablePortent) {
     issues.push(...validatePortent(data, settings));
@@ -1195,301 +1001,28 @@ function validateConcept(
   return issues;
 }
 
-/**
- * Provenance/trust/lifecycle family checks (§5). All advisory warnings — a
- * concept missing any of these is still conformant (§11). Gated by
- * `settings.warnTrustFields`.
- */
-function validateTrustFamilies(data: Record<string, unknown>, today: Date): OkfIssue[] {
-  const issues: OkfIssue[] = [];
 
-  // `verified` (§5.2): a list of `{ by, at }` events, or a bare mapping.
-  if ("verified" in data && data["verified"] !== null) {
-    const events = normalizeVerified(data);
-    const raw = data["verified"];
-    if (events.length === 0 && raw !== undefined) {
-      issues.push({
-        severity: "warning",
-        rule: "§5.2",
-        message:
-          "`verified` should be a `{ by, at }` mapping or a list of them.",
-      });
-    }
-    for (const e of events) {
-      if (!hasNonEmpty(e, "by")) {
-        issues.push({
-          severity: "warning",
-          rule: "§5.2",
-          message: "A `verified` entry is missing its `by` actor.",
-        });
-      } else if (!ACTOR_RE.test(String(e["by"]).trim())) {
-        issues.push({
-          severity: "warning",
-          rule: "§7",
-          message: `\`verified\` actor \`${String(
-            e["by"]
-          )}\` should follow the actor convention (\`<producer>/<version>\`, \`human:<id>\`, \`process:<id>\`).`,
-        });
-      }
-      if (e["at"] !== undefined && !ISO_DATETIME_RE.test(String(e["at"]))) {
-        issues.push({
-          severity: "warning",
-          rule: "§5.2",
-          message: "A `verified` entry's `at` is not a parseable ISO 8601 datetime.",
-        });
-      }
-    }
-  }
-
-  // `status` (§5.4): draft | stable | deprecated. Absent ⇒ stable.
-  if ("status" in data) {
-    const s = data["status"];
-    if (typeof s !== "string" || !OKF_STATUSES.includes(s.trim() as never)) {
-      issues.push({
-        severity: "warning",
-        rule: "§5.4",
-        message: `\`status\` should be one of ${OKF_STATUSES.join(" | ")}.`,
-      });
-    }
-  }
-
-  // `stale_after` (§5.5): an absolute YYYY-MM-DD date, and a review deadline.
-  if ("stale_after" in data && data["stale_after"] != null) {
-    const s = String(data["stale_after"]).slice(0, 10);
-    if (!ISO_DATE_RE.test(s)) {
-      issues.push({
-        severity: "warning",
-        rule: "§5.5",
-        message: "`stale_after` should be an absolute date (`YYYY-MM-DD`).",
-      });
-    } else if (isStale(data, today)) {
-      issues.push({
-        severity: "warning",
-        rule: "§5.5",
-        message: `\`stale_after\` (${s}) has passed; this concept is due for review.`,
-      });
-    }
-  }
-
-  // `sources` (§5.1): a list; each entry needs a `resource`.
-  if ("sources" in data && data["sources"] != null) {
-    const src = data["sources"];
-    if (!Array.isArray(src)) {
-      issues.push({
-        severity: "warning",
-        rule: "§5.1",
-        message: "`sources` should be a YAML list of source entries.",
-      });
-    } else {
-      src.forEach((entry, i) => {
-        if (!entry || typeof entry !== "object") {
-          issues.push({
-            severity: "warning",
-            rule: "§5.1",
-            message: `\`sources[${i}]\` should be a mapping with at least a \`resource\`.`,
-          });
-          return;
-        }
-        const e = entry as Record<string, unknown>;
-        if (!hasNonEmpty(e, "resource")) {
-          issues.push({
-            severity: "warning",
-            rule: "§5.1",
-            message: `\`sources[${i}]\` is missing the required \`resource\`.`,
-          });
-        }
-        if (
-          "author" in e &&
-          (typeof e["author"] !== "string" || e["author"].trim().length === 0)
-        ) {
-          issues.push({
-            severity: "warning",
-            rule: "§5.1",
-            message: `\`sources[${i}].author\` should be a non-empty string.`,
-          });
-        }
-        if ("usage_count" in e && typeof e["usage_count"] !== "number") {
-          issues.push({
-            severity: "warning",
-            rule: "§5.1",
-            message: `\`sources[${i}].usage_count\` should be a number.`,
-          });
-        }
-        if (
-          "last_modified" in e &&
-          e["last_modified"] != null &&
-          !ISO_DATE_RE.test(String(e["last_modified"]).slice(0, 10))
-        ) {
-          issues.push({
-            severity: "warning",
-            rule: "§5.1",
-            message: `\`sources[${i}].last_modified\` should be an absolute date (\`YYYY-MM-DD\`).`,
-          });
-        }
-      });
-    }
-  }
-
-  return issues;
-}
 
 /**
- * Attested Computation concept checks (§10). A sanctioned way to compute a
- * value: `runtime` is required for the type; the computation must be present
- * (an inline `# Computation` fence or a `computation` path); `executor` and
- * `attester` carry the run + check interface.
- */
-function validateAttestedComputation(
-  data: Record<string, unknown>,
-  content: string
-): OkfIssue[] {
-  const issues: OkfIssue[] = [];
-
-  if (!hasNonEmpty(data, "runtime")) {
-    issues.push({
-      severity: "error",
-      rule: "§10.2",
-      message:
-        "`runtime` is required for an Attested Computation (e.g. `bigquery`, `dbt`, `python`).",
-    });
-  }
-
-  if ("parameters" in data && data["parameters"] != null) {
-    const params = data["parameters"];
-    if (!Array.isArray(params)) {
-      issues.push({
-        severity: "warning",
-        rule: "§10.2",
-        message: "`parameters` should be a list of `{ name, type, required }`.",
-      });
-    } else {
-      params.forEach((p, i) => {
-        if (!p || typeof p !== "object" || !hasNonEmpty(p as Record<string, unknown>, "name")) {
-          issues.push({
-            severity: "warning",
-            rule: "§10.2",
-            message: `\`parameters[${i}]\` should have at least a \`name\`.`,
-          });
-        }
-      });
-    }
-  }
-
-  // The computation itself: an inline body `# Computation` fence, or a
-  // `computation` path (§10.3). Warn when neither is present.
-  const hasComputationHeading = /^#{1,6}\s+Computation\s*$/m.test(content);
-  if (!hasComputationHeading && !hasNonEmpty(data, "computation")) {
-    issues.push({
-      severity: "warning",
-      rule: "§10.3",
-      message:
-        "An Attested Computation needs its computation — either a body `# Computation` fenced block or a `computation` path.",
-    });
-  }
-
-  if ("executor" in data && data["executor"] != null) {
-    const ex = data["executor"];
-    if (!ex || typeof ex !== "object") {
-      issues.push({
-        severity: "warning",
-        rule: "§10.2",
-        message: "`executor` should be a mapping with `resource` and `receipt`.",
-      });
-    } else {
-      const e = ex as Record<string, unknown>;
-      if (!hasNonEmpty(e, "resource")) {
-        issues.push({
-          severity: "warning",
-          rule: "§10.2",
-          message: "`executor.resource` (run instructions or code) is missing.",
-        });
-      }
-      if ("receipt" in e && !Array.isArray(e["receipt"])) {
-        issues.push({
-          severity: "warning",
-          rule: "§10.2",
-          message: "`executor.receipt` should be a list of fields a run must return.",
-        });
-      }
-    }
-  }
-
-  if ("attester" in data && data["attester"] != null) {
-    const at = data["attester"];
-    if (!at || typeof at !== "object" || !hasNonEmpty(at as Record<string, unknown>, "resource")) {
-      issues.push({
-        severity: "warning",
-        rule: "§10.2",
-        message: "`attester.resource` (deterministic check code) is missing.",
-      });
-    }
-  }
-
-  return issues;
-}
-
-/**
- * §11 rule 3: a reserved file follows §8 when present. Not optional — the
+ * §11.1: a reserved file follows §8 when present. Not optional — the
  * structure of an `index.md` that exists is part of what makes a bundle
  * conformant, while a *missing* one is explicitly permitted (§8, §11).
  */
-function validateIndex(content: string, isRoot: boolean): OkfIssue[] {
+function validateIndex(fm: ReturnType<typeof readFrontmatter>, isRoot: boolean, bundle: BundleContext): OkfIssue[] {
   const issues: OkfIssue[] = [];
-
-  const split = splitFrontmatter(content);
-  const hasFm = split.hasFm;
-  const raw = split.raw;
-
-  if (hasFm) {
-    if (!isRoot) {
-      issues.push({
-        severity: "error",
-        rule: "§8",
-        message:
-          "Non-root `index.md` must not contain frontmatter (§8). Only the bundle-root index.md may, and only for `okf_version`.",
-      });
-    } else {
-      let data: Record<string, unknown> = {};
-      try {
-        const parsed: unknown = parseYaml(raw);
-        if (parsed && typeof parsed === "object") {
-          data = parsed as Record<string, unknown>;
-        }
-      } catch {
-        issues.push({
-          severity: "error",
-          rule: "§12",
-          message: "Root `index.md` frontmatter is not parseable YAML.",
-        });
-        return issues;
-      }
-      const keys = Object.keys(data);
-      const extra = keys.filter((k) => k !== "okf_version");
-      if (extra.length > 0) {
-        issues.push({
-          severity: "error",
-          rule: "§12",
-          message: `Root index.md frontmatter may only contain \`okf_version\`. Unexpected key(s): ${extra.join(
-            ", "
-          )}.`,
-        });
-      }
-      if (
-        "okf_version" in data &&
-        !OKF_KNOWN_VERSIONS.includes(String(data["okf_version"]) as never)
-      ) {
-        issues.push({
-          severity: "warning",
-          rule: "§12",
-          message: `Declared okf_version "${data["okf_version"]}" is not one of ${OKF_KNOWN_VERSIONS.join(
-            " / "
-          )} (this validator targets v${OKF_VERSION}).`,
-        });
-      }
+  if (fm.hasFm && !isRoot) issues.push({ severity: "error", rule: "§8", message: "Only the bundle-root index.md may contain frontmatter (§8.1)." });
+  if (isRoot && fm.data) {
+    if (!absent(fm.data.okf_version) && typeof fm.data.okf_version !== "string") issues.push({ severity: "warning", rule: "§8.1", message: "Quote okf_version as a major.minor string." });
+    for (const key of ["title", "description", "license"]) {
+      if (!absent(fm.data[key]) && !text(fm.data[key])) issues.push({ severity: "warning", rule: "§8.1", message: `Bundle ${key} should be a string.` });
+    }
+    const license = fm.data.license;
+    if (text(license) && license.includes("/") && bundle.exists) {
+      const target = localTarget("index.md", license);
+      if (target !== null && !bundle.exists(target, true)) issues.push({ severity: "warning", rule: "§8.1", message: `License file ${license} not found in the bundle.` });
     }
   }
-
-  const body = hasFm ? split.body : content;
+  const body = fm.body;
   const hasHeading = /^#{1,6}\s+\S/m.test(body);
   // Entries are read with the same scanner `mergeIndex` uses, so one reader
   // decides what an entry is. A pattern that stops at the first `]` can't see
@@ -1497,7 +1030,7 @@ function validateIndex(content: string, isRoot: boolean): OkfIssue[] {
   // an index this plugin had just generated would be reported as listing
   // nothing. A wikilink entry counts too: the merger treats it as a listing, so
   // §8 shouldn't be raised against an index written entirely in that syntax.
-  const hasLinkBullet = body
+  const hasLinkBullet = indexLinks(body).size > 0 || body
     .split(/\r?\n/)
     .some((l) => parseBulletLink(l) !== null || BULLET_WIKILINK_RE.test(l));
   // An empty directory has nothing to enumerate, and §8 asks an index to
@@ -1530,25 +1063,20 @@ function validateIndex(content: string, isRoot: boolean): OkfIssue[] {
   return issues;
 }
 
-/** §11 rule 3 for the other reserved file: `log.md` follows §9 when present. */
-function validateLog(content: string): OkfIssue[] {
+/** §11.1: `log.md` follows §9 when present. */
+function validateLog(fm: ReturnType<typeof readFrontmatter>, legacyBundle: boolean, ambiguous: boolean): OkfIssue[] {
   const issues: OkfIssue[] = [];
 
-  const { hasFm } = splitFrontmatter(content);
-  if (hasFm) {
+  if (fm.hasFm) {
     issues.push({
-      severity: "warning",
+      severity: legacyBundle || ambiguous ? "warning" : "error",
+      ...(ambiguous ? { unknownVersion: true } : {}),
       rule: "§9",
-      message: "`log.md` is not expected to contain frontmatter.",
+      message: ambiguous ? "Legacy type: Log in an unversioned bundle: permitted in v0.2, not v0.3; declare the intended version." : "OKF v0.3 log.md has no frontmatter.",
     });
   }
 
-  const h2s: string[] = [];
-  const h2Re = /^##\s+(.+?)\s*$/gm;
-  let h2Match: RegExpExecArray | null;
-  while ((h2Match = h2Re.exec(content)) !== null) {
-    h2s.push(h2Match[1].trim());
-  }
+  const h2s = logHeadings(fm.body);
   if (h2s.length === 0) {
     issues.push({
       severity: "warning",
@@ -1561,7 +1089,7 @@ function validateLog(content: string): OkfIssue[] {
 
   const dates: string[] = [];
   for (const h of h2s) {
-    if (!ISO_DATE_RE.test(h)) {
+    if (!ISO_DATE_RE.test(h) || !instant(h)) {
       issues.push({
         severity: "error",
         rule: "§9",
@@ -1594,120 +1122,65 @@ function hasNonEmpty(data: Record<string, unknown>, key: string): boolean {
   return true;
 }
 
-export function applyFixes(
-  path: string,
-  content: string,
-  issues: OkfIssue[],
-  settings: OkfSettings,
-  includeMigrations = false
-): { content: string; applied: string[] } {
-  const applied: string[] = [];
-  const MIGRATIONS: FixKind[] = ["migrate-timestamp", "migrate-citations"];
-  const fixes = new Set(
-    issues
-      .map((i) => i.fix)
-      .filter(
-        (f): f is FixKind =>
-          !!f && (includeMigrations || !MIGRATIONS.includes(f))
-      )
-  );
-  if (fixes.size === 0) return { content, applied };
-
-  const nowIso = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
-  const actor = settings.defaultActor || "okf-enforcer/0.6";
-  const title = basename(path);
-  const split = splitFrontmatter(content);
-
-  if (!split.hasFm) {
-    const lines = [
-      `type: ${settings.defaultType}`,
-      `title: ${title}`,
-      `generated: { by: ${actor}, at: ${nowIso} }`,
-    ];
-    const fm = `---\n${lines.join("\n")}\n---\n\n`;
-    applied.push("added frontmatter (type, title, generated)");
-    return { content: fm + content.replace(/^\s+/, ""), applied };
-  }
-
-  const fmLines = split.raw.split(/\r?\n/);
-  let body = split.body;
-  const hasKey = (k: string) =>
-    fmLines.some((l) => new RegExp(`^${k}\\s*:`).test(l.trim()));
-
-  if (fixes.has("add-type") && !hasKey("type")) {
-    fmLines.unshift(`type: ${settings.defaultType}`);
-    applied.push(`added type: ${settings.defaultType}`);
-  }
-  if (fixes.has("add-title") && !hasKey("title")) {
-    fmLines.push(`title: ${title}`);
-    applied.push("added title");
-  }
-  if (fixes.has("add-generated") && !hasKey("generated")) {
-    fmLines.push(`generated: { by: ${actor}, at: ${nowIso} }`);
-    applied.push("added generated");
-  }
-
-  // §13.1 migration: rewrite a legacy `timestamp: X` into `generated: { by, at: X }`,
-  // preserving the original timestamp value as `generated.at`.
-  if (fixes.has("migrate-timestamp") && hasKey("timestamp") && !hasKey("generated")) {
-    for (let i = 0; i < fmLines.length; i++) {
-      const m = fmLines[i].match(/^(\s*)timestamp\s*:\s*(.+?)\s*$/);
-      if (m) {
-        const at = m[2].replace(/^["']|["']$/g, "");
-        fmLines[i] = `${m[1]}generated: { by: ${actor}, at: ${at} }`;
+export function applyFixes(path: string, content: string, issues: OkfIssue[], settings: OkfSettings, migrateOnly = false): { content: string; applied: string[] } {
+  const unchanged = { content, applied: [] as string[] };
+  if (dotPath(path) || isReserved(path) || issues.some(i => i.unknownVersion)) return unchanged;
+  const fm = readFrontmatter(content);
+  if (!fm.data || !text(fm.data.type)) return unchanged;
+  const fixes = new Set(issues.filter(i => !i.providerId).map(i => i.fix));
+  const eol = content.includes("\r\n") ? "\r\n" : "\n";
+  const actor = JSON.stringify(settings.defaultActor || DEFAULT_SETTINGS.defaultActor);
+  const applied: string[] = [], additions: string[] = [];
+  let raw = fm.raw, body = fm.body;
+  if (migrateOnly) {
+    if (fixes.has("migrate-timestamp") && !("generated" in fm.data) && instant(fm.data.timestamp)) {
+      // A standalone, top-level scalar only. Never replace a nested extension key,
+      // an alias/anchor, a flow-map member, or any other syntax we can't edit in place.
+      raw = raw.replace(/^timestamp[ \t]*:[ \t]*(?:"[^"\r\n]*"|'[^'\r\n]*'|[\dTtZz:.+\-]+)([ \t]*(?:#[^\r\n]*)?)(?=\r?$)/m, (_, comment: string) => {
         applied.push("migrated timestamp → generated");
-        break;
+        return `generated: { by: ${actor}, at: ${JSON.stringify(fm.data!.timestamp)} }${comment}`;
+      });
+    }
+    if (fixes.has("migrate-citations") && !("sources" in fm.data)) {
+      const migrated = migrateCitations(body);
+      if (migrated) {
+        additions.push("sources:", ...migrated.resources.map(r => `  - resource: ${JSON.stringify(r)}`));
+        body = migrated.body; applied.push("migrated Citations → sources");
       }
     }
-  }
-
-  // §13.1 migration: lift a body `# Citations` list into a `sources` frontmatter
-  // block and drop the section. Each bullet becomes a `{ resource }` entry.
-  if (fixes.has("migrate-citations") && !hasKey("sources")) {
-    const migrated = migrateCitations(body);
-    if (migrated) {
-      body = migrated.body;
-      fmLines.push("sources:");
-      for (const r of migrated.resources) fmLines.push(`  - resource: ${r}`);
-      applied.push(`migrated # Citations → sources (${migrated.resources.length})`);
+  } else {
+    if (fixes.has("add-title") && !("title" in fm.data)) {
+      additions.push(`title: ${JSON.stringify(basename(path))}`); applied.push("added title");
+    }
+    if (fixes.has("add-generated") && !("generated" in fm.data)) {
+      additions.push(`generated: { by: ${actor}, at: ${JSON.stringify(new Date().toISOString())} }`); applied.push("added generated");
     }
   }
-
-  const rebuilt = `---\n${fmLines.join("\n")}\n---${body}`;
-  return { content: rebuilt, applied };
+  if (!applied.length) return unchanged;
+  const open = content.slice(0, content.indexOf("\n") + 1);
+  const closing = content.slice(open.length + fm.raw.length, content.length - fm.body.length);
+  const candidate = open + [raw, ...additions].join(eol) + closing + body;
+  // If a flow mapping, unusual indentation, alias, etc. cannot be edited this
+  // way, keep the original bytes instead of re-serializing the author's YAML.
+  const after = readFrontmatter(candidate).data;
+  if (!after || after.type !== fm.data.type || additions.some(line => !line.startsWith(" ") && !(line.split(":", 1)[0] in after))) return unchanged;
+  return { content: candidate, applied };
 }
 
-/**
- * Extract a body `# Citations` section into source resources and return the body
- * with that section removed. Returns null when there's no such section or it
- * holds no bullet entries.
- */
-function migrateCitations(
-  body: string
-): { body: string; resources: string[] } | null {
-  const lines = body.split(/\r?\n/);
-  const start = lines.findIndex((l) => /^#{1,6}\s+Citations\s*$/.test(l));
-  if (start === -1) return null;
-
-  // The section runs until the next heading of the same-or-higher level (any
-  // `#`-prefixed line here) or end of file.
-  let end = lines.length;
-  for (let i = start + 1; i < lines.length; i++) {
-    if (/^#{1,6}\s+\S/.test(lines[i])) {
-      end = i;
-      break;
-    }
-  }
-
+/** Migrate only a simple list of bare resources. Mixed prose, titled links,
+ * code samples and anything ambiguous stay verbatim for a human to migrate. */
+function migrateCitations(body: string): { body: string; resources: string[] } | null {
+  const lines = body.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+  const start = citationsHeading(body);
+  if (start === undefined) return null;
   const resources: string[] = [];
-  for (let i = start + 1; i < end; i++) {
-    const m = lines[i].match(/^\s*[-*]\s+(.+?)\s*$/);
-    if (m) resources.push(m[1].replace(/^["']|["']$/g, ""));
+  let end = start + 1;
+  while (end < lines.length && !/^#\s+/.test(lines[end])) {
+    const line = lines[end++].trimEnd();
+    if (!line.trim()) continue;
+    const item = /^[-*+]\s+(\S+)$/.exec(line);
+    if (!item || /[<>\[\]`]/.test(item[1])) return null;
+    resources.push(item[1]);
   }
-  if (resources.length === 0) return null;
-
-  const kept = [...lines.slice(0, start), ...lines.slice(end)];
-  // Collapse the blank-line gap the removed section may leave behind.
-  const newBody = kept.join("\n").replace(/\n{3,}/g, "\n\n");
-  return { body: newBody, resources };
+  return resources.length ? { resources, body: lines.slice(0, start).join("") + lines.slice(end).join("") } : null;
 }

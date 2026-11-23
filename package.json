@@ -1,7 +1,7 @@
 {
   "name": "okf-enforcer",
   "version": "0.6.1",
-  "description": "Validate and enforce the Open Knowledge Format (OKF v0.2) in Obsidian.",
+  "description": "Validate Open Knowledge Format v0.3 bundles in Obsidian with v0.1/v0.2 compatibility.",
   "main": "main.js",
   "scripts": {
     "test": "node tests/run.mjs",
@@ -18,9 +18,14 @@
   ],
   "license": "Apache-2.0",
   "devDependencies": {
+    "@types/markdown-it": "14.2.0",
     "@types/node": "^20.11.0",
     "esbuild": "0.28.1",
     "obsidian": "1.14.4",
     "typescript": "5.4.5"
+  },
+  "dependencies": {
+    "markdown-it": "14.3.3",
+    "yaml": "2.9.1"
   }
 }

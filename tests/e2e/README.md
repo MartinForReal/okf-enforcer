@@ -1,8 +1,8 @@
 # Actual Obsidian desktop E2E
 
 This is a disposable **test companion**, not a shipped integration. It uses the
-real provider bundle, Obsidian YAML parser, plugin loader, vault, and report UI.
-Node tests use JSON-flow frontmatter only and do not establish runtime acceptance.
+real provider bundle (including its YAML 1.2 parser), plugin loader, vault and
+report UI. The Node suite also runs real parsers; it is not native acceptance.
 
 1. `npm run build`
 2. `node tests/e2e/prepare.mjs` prints a new marked fixture root, vault, profile,
@@ -55,6 +55,14 @@ may overlap explicit validation: wait for the observed verdict and retain the
 signal of the invocation being tested, not the last callback in another scan.
 The save control starts only after competing refreshes settle and requires an
 existing owner finding, so a background scan cannot masquerade as a save hook.
+
+The primary root declares **OKF v0.3**. The companion checks the spec metadata,
+current trust tier, untyped non-concepts, reserved-file/YAML errors and optional
+computation advice. After the no-write hash assertion, it temporarily declares
+v0.2 to prove that a file-relative computation can fall back to the bundle root,
+then an unsupported version to verify an unknown verdict. The exact original
+root is restored in `finally`. The explicit fix control adds a title to a typed
+concept without rewriting its extension metadata or converting a README.
 
 For a true RED/GREEN run, preserve the pre-integration bundle in the marked
 fixture, run the companion and observe the absent API failure, then rebuild,

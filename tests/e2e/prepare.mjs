@@ -20,14 +20,17 @@ const provider = path.join(vault, ".obsidian/plugins/okf-enforcer");
 const consumer = path.join(vault, ".obsidian/plugins/okf-api-e2e-consumer");
 await Promise.all([provider, consumer, profile, evidence].map((p) => mkdir(p, { recursive: true })));
 const fixtures = {
-  "clean.md": "---\ntype: Concept\ntitle: Clean note\npolicy:\n  owners:\n    - human:fixture\n---\n\n# Clean note\n",
+  "clean.md": "---\ntype: Concept\ntitle: Clean note\npolicy:\n  owners:\n    - human:fixture\ngenerated: {by: fixture/v1, at: 2026-06-20T14:00:00Z}\nverified:\n  - {by: human:former, at: 2026-06-19}\n  - {by: team:current, at: 2026-06-20T16:00:00+02:00}\n---\n\n# Clean note\n",
   "broken.md": "# Missing frontmatter\n",
   "invalid-yaml.md": "---\ntype: [unterminated\n---\n\n# Invalid YAML\n",
   "computation.md": "---\ntype: Attested Computation\n---\n\n# No runtime\n",
-  "fix-me.md": "# Fix this fixture\n",
-  "index.md": "---\nokf_version: '0.2'\n---\n\n# Concepts\n\n* [Clean](clean.md)\n",
+  "fix-me.md": "---\ntype: Concept\nx-author: {untouched: true}\n---\n\n# Fix this fixture\n",
+  "index.md": "---\nokf_version: '0.3'\ntitle: Native E2E fixture\nlicense: CC0-1.0\nx-fixture: {keep: true}\n---\n\n# Concepts\n\n* [Clean](clean.md)\n",
   "nested/note.md": "---\ntype: Topic\n---\n\n# Nested note\n",
   "nested/index.md": "# Concepts\n\n* [Nested note](note.md)\n",
+  "nested/log.md": "---\ntype: Log\n---\n\n## 2026-07-01\n* Legacy header is a v0.3 structural error.\n",
+  "nested/path-contract.md": "---\ntype: Attested Computation\nruntime: sql\ncomputation: refs/sanctioned.md\n---\n\n[Sanctioned definition](/refs/sanctioned.md)\n",
+  "refs/sanctioned.md": "---\ntype: Reference\n---\n\n```sql\nSELECT 1\n```\n",
   "gap/note.md": "---\ntype: Concept\n---\n",
   "Excluded/private.md": "# Excluded invalid note\n",
   ".obsidian/hidden.md": "# Configuration is not a concept\n",
@@ -43,7 +46,7 @@ try { await unlink(generatedIndex); } catch (error) { if (error.code !== "ENOENT
 for (const name of ["main.js", "manifest.json", "styles.css"]) await copyFile(name, path.join(provider, name));
 const settings = { warnMissingFields: [], warnTrustFields: true, checkAttestedComputation: true,
   scanOnStartup: false, fixOnSave: false, liveCheckOnSave: false, autoGenerateIndex: false,
-  generateIndexOnStartup: false, autoMigrateOnFix: false, reportIndexGaps: false,
+  generateIndexOnStartup: false, reportIndexGaps: false,
   enablePortent: false, excludeFolders: ["Excluded"], batchSize: 1 };
 await writeFile(path.join(provider, "data.json"), JSON.stringify(settings));
 await writeFile(path.join(vault, ".obsidian/community-plugins.json"), JSON.stringify(["okf-api-e2e-consumer", "okf-enforcer"]));

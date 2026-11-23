@@ -26,14 +26,46 @@ function harness(files: ScanFile[] = [file("clean.md")], folders: ScanFolder[] =
   return { host, settings, activity, controller, api: controller };
 }
 
-test("a complete read-only scan accounts for clean and invalid notes", async () => {
-  const h = harness([file("clean.md"), file("bad.md", "No frontmatter")]);
+test("a declared v0.2 scan keeps its legacy structural rules; v0.3 skips untyped Markdown", async () => {
+  const h = harness([file("index.md", '---\nokf_version: "0.2"\n---'), file("clean.md"), file("bad.md", "No frontmatter")]);
   const result = await h.api.scanVault();
   assert.equal(result.status, "complete");
   assert.equal(result.conformance, "non-conformant");
-  assert.deepEqual(result.counts.files, { candidates: 2, validated: 2, unreadable: 0, unprocessed: 0 });
+  assert.deepEqual(result.counts.files, { candidates: 3, validated: 3, unreadable: 0, unprocessed: 0 });
   assert.equal(result.files.find((f) => f.path === "clean.md")!.diagnostics.length, 0);
   assert.equal(result.files.find((f) => f.path === "bad.md")!.diagnostics[0].severity, "error");
+  const v03 = harness([file("index.md", '---\nokf_version: "0.3"\nlicense: MIT\nx-local: { nested: true }\n---'), file("README.md", "No frontmatter")]);
+  assert.equal((await v03.controller.scanVault()).conformance, "conformant");
+  assert.equal((await v03.controller.createPass().evaluate("README.md", "No frontmatter")).issues[0].severity, "warning");
+});
+
+test("a malformed root is a structural failure; note-level version coverage is unknown consistently", async () => {
+  const h = harness([file("index.md", "---\nokf_version: [\n---\n"), file("ok.md")]);
+  const report = await h.controller.scanVault();
+  assert.equal(report.conformance, "non-conformant");
+  assert.equal((await h.controller.createPass().evaluate("ok.md", note())).conformance, "unknown");
+  assert.ok(report.files.find(f => f.path === "ok.md")!.diagnostics.some(i => i.message.includes("Cannot determine")));
+});
+
+test("unknown bundle versions receive best-effort diagnostics, never a positive verdict", async () => {
+  for (const declaration of ['"1.0"', '0.30', '[0.3]']) {
+    const index = `---\nokf_version: ${declaration}\n---\n`;
+    const h = harness([file("index.md", index), file("ok.md")]);
+    assert.equal((await h.controller.validateContent({path:"index.md", content:index})).conformance, "unknown", declaration);
+    const pass = h.controller.createPass();
+    assert.equal((await pass.evaluate("ok.md", note())).conformance, "unknown");
+    assert.equal((await h.controller.scanVault()).conformance, "unknown");
+    assert.equal(h.controller.api!.okfVersion, "0.3");
+  }
+});
+
+test("historic Acme type: Log is compatible with declared v0.2, ambiguous without a version, invalid in v0.3", async () => {
+  const log = '---\ntype: Log\ntitle: Acme Retail bundle history\n---\n\n## 2026-07-01\n* Verified.\n';
+  for (const [v, verdict] of [["0.2", "conformant"], ["", "unknown"], ["0.3", "non-conformant"]]) {
+    const h = harness([file("index.md", v ? `---\nokf_version: "${v}"\n---` : '# Subdirectories'), file("log.md", log)]);
+    assert.equal((await h.controller.scanVault()).conformance, verdict, v);
+    assert.equal((await h.controller.createPass().evaluate("log.md", log)).conformance, verdict, v);
+  }
 });
 
 test("configured exclusions and a custom config directory are not scanned", async () => {
@@ -43,6 +75,32 @@ test("configured exclusions and a custom config directory are not scanned", asyn
   const result = await h.api.scanVault();
   assert.deepEqual(result.files.map((f) => f.path), ["keep.md"]);
   assert.deepEqual(result.scope, { kind: "configured-vault", configDir: "_config", excludeFolders: ["Templates"] });
+});
+
+test("links and computation paths use case-sensitive bundle inventory without fetching targets", async () => {
+  const body = "[sibling](../assets/My%20SQL.sql#read) [root][r] [external](../../outside)\n\n[r]: /assets/My%20SQL.sql\n";
+  const path = "notes/calc.md";
+  const calc = (target: string) => `---\ntype: Attested Computation\nruntime: sql\ncomputation: '${target}'\n---\n${body}`;
+  for (const version of ["0.3", "0.2", undefined]) {
+    const h = harness([...(version ? [file("index.md", `---\nokf_version: '${version}'\n---`)] : []), file(path, calc("assets/My%20SQL.sql"))]);
+    const lookups: string[] = [];
+    h.host.hasPath = p => { lookups.push(p); return p === "assets/My SQL.sql"; };
+    const messages = (await h.controller.scanVault()).files.find(f => f.path === path)!.diagnostics.map(d => d.message);
+    if (version === "0.3") assert.match(messages.join(), /computation.*not found/i);
+    else assert.match(messages.join(), /legacy root fallback/i);
+    for (const target of ["/assets/My%20SQL.sql", "../assets/My%20SQL.sql"]) {
+      assert.deepEqual((await h.controller.createPass().evaluate(path, calc(target))).issues, []);
+    }
+    assert.match((await h.controller.createPass().evaluate(path, calc("../assets/my%20sql.sql"))).issues.map(i => i.message).join(), /not found/i);
+    const links = await h.controller.createPass().evaluate(path, note() + '[gone][lost]\n\n[lost]: /assets/gone.md\n');
+    assert.match(links.issues.map(i => i.message).join(), /gone\.md/); assert.equal(links.conformance, "conformant");
+    for (const external of ["https://example.test/x", "file:///outside", "%2e%2e/%2e%2e/outside", "//outside/x", "../.private/x", "..%5coutside", "bad%00outside", "bad%1foutside"]) {
+      await h.controller.createPass().evaluate(path, calc(external));
+    }
+    assert.ok(lookups.includes("assets/My SQL.sql"));
+    assert.ok(!lookups.some(p => /outside|\.private/.test(p)), JSON.stringify(lookups));
+    assert.equal((await h.controller.validateContent({path, content: calc("unknown.sql")})).diagnostics.length, 0);
+  }
 });
 
 test("an unreadable note makes coverage partial rather than silently conformant", async () => {
@@ -116,12 +174,13 @@ test("cancelling after one batch leaves remaining files explicitly unprocessed",
   assert.deepEqual(scan.counts.files, { candidates: 3, validated: 1, unreadable: 0, unprocessed: 2 });
 });
 
-test("disabled error-capable checks yield unknown even after every file was read", async () => {
+test("optional computation advice is independent of structural scan coverage", async () => {
   const h = harness(); h.settings.checkAttestedComputation = false;
   const report = await h.api.scanVault();
   assert.equal(report.status, "complete");
-  assert.equal(report.checkCoverage, "reduced");
-  assert.equal(report.conformance, "unknown");
+  assert.equal(report.checkCoverage, "full");
+  assert.equal(report.conformance, "conformant");
+  assert.equal(report.enabledChecks.checkAttestedComputation, false);
 });
 
 test("concurrent API scans reject busy without releasing the first scan's ownership", async () => {
@@ -193,9 +252,9 @@ test("an old public registration facade cannot register after host disposal", ()
 });
 
 test("public results omit private fixes while the shared UI collector retains them", async () => {
-  const h = harness([file("bad.md", "No YAML")]);
+  const h = harness([file("titled.md")]); h.settings.warnMissingFields = ["title"];
   const scan = await collectVault(h.host, snapshotSettings(h.settings), { pluginVersion: "0.6.1", now: NOW, guard() {} });
-  assert.equal(scanResults(scan)[0].issues[0].fix, "add-frontmatter");
+  assert.equal(scanResults(scan)[0].issues[0].fix, "add-title");
   const report = toPublicVaultReport(scan);
   assert.equal("fix" in report.files[0].diagnostics[0], false);
   (report.files[0].diagnostics as unknown[]).length = 0;
@@ -219,7 +278,7 @@ test("public scan metadata is deeply independent of the collected scan", async (
   Reflect.set(report.counts.folders, "validated", 99);
   Reflect.set(report.extensions, "complete", false);
   assert.deepEqual(scan.enabledChecks.warnMissingFields, ["title"]);
-  assert.deepEqual(scan.disabledErrorChecks, ["checkAttestedComputation"]);
+  assert.deepEqual(scan.disabledErrorChecks, []);
   assert.equal(scan.enabledChecks.portent.types[0], "Project");
   assert.equal(scan.enabledChecks.portent.statuses[0], "captured");
   assert.equal(scan.enabledChecks.portent.checks[0], "type");

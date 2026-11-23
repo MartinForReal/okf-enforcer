@@ -3,6 +3,10 @@
 > API v1 is implemented on this development branch; this does not announce a
 > release. Feature-detect it rather than assuming an installed version has it.
 
+On this branch `apiVersion` is still `1` and `okfVersion` is `"0.3"`: the
+latter identifies the engine's target, not the version of any particular
+vault or its conformance. Registration is still the only API operation.
+
 OKF Enforcer hosts **note-level validators**, not another general plugin
 framework. A companion owns its policy, settings and integrations. Enforcer
 runs its checks in the active-note and vault reports and labels the source of
@@ -96,7 +100,7 @@ authority and are stripped. Core findings cannot be replaced or suppressed.
 | `kind` | `"concept"`, `"index"` or `"log"` (reserved names are recognized by the host) |
 | `content` | Complete Markdown text read for this pass |
 | `body` | Text after the frontmatter block, or the entire text when it has no recognized block |
-| `frontmatter` | Parsed mapping, or `null`; Obsidian’s YAML parser is used |
+| `frontmatter` | Parsed YAML 1.2 core mapping, or `null`; the validator and extensions see the same parse |
 | `frontmatterState` | `"valid"`, `"missing"` or `"invalid"`; a non-mapping YAML value is invalid |
 | `evaluatedAt` | Captured ISO timestamp, shared by the pass |
 | `coreDiagnostics` | Copied note-level OKF diagnostics, without fixes, other providers or Portent; folder-gap checks are separate |
@@ -106,14 +110,19 @@ Data is copied/frozen per invocation, including nested YAML values and core
 diagnostics. Parsed date objects normalize to ISO strings. YAML aliases/cycles
 may be preserved; do not assume every parsed mapping can be JSON-stringified.
 No mutable vault, plugin, DOM, host settings or write callback is supplied.
-Do not mutate context or retain it indefinitely. Invalid/missing frontmatter
-still reaches body-oriented validators; do not assume `frontmatter` exists.
+Do not mutate context or retain it indefinitely. Under v0.3, ordinary Markdown
+without a usable `type` is skipped rather than delivered as a `concept`.
+Malformed frontmatter still reaches body-oriented validators with `invalid`;
+reserved files and legacy candidates may have `missing`. Never assume
+`frontmatter` exists. `tags: "a,b"` is one tag, not two; extension keys at
+every depth remain available. Input is never rewritten to normalize a list.
 
 Active-note, scan, save and post-fix checks use the same pipeline. A pass
 captures settings, evaluation time and registrations. Scans obey exclusions
 and the configured Obsidian configuration directory. They are not atomic vault
-snapshots or conformance certificates. Unreadable/unprocessed notes and reduced
-core checks yield unknown core conformance; folder findings are counted
+snapshots or conformance certificates. Unreadable/unprocessed notes or an
+unsupported declared version yield unknown core conformance. Optional contract
+advice is independent of structural coverage. Folder findings are counted
 separately from notes. Extension coverage is tracked independently.
 
 ## Lifetime and load order
@@ -198,13 +207,14 @@ deliberately separate from extending validation.
 - `npm test` covers registry isolation, revocation, attachment order/cleanup,
   pipeline results, core-versus-extension verdicts, initialization, stale tab
   and registry results, save/post-fix paths, and report rendering boundaries.
-  Node tests use a JSON-flow YAML subset and Obsidian boundary doubles.
+  Node tests use the production YAML and Markdown parsers, unchanged upstream
+  Acme Retail examples, and Obsidian boundary doubles.
 - `npx tsc --noEmit` also checks the owner example; `npm run build` rebuilds the
-  tracked provider bundle against the Obsidian 1.7.2 API declarations.
+  tracked provider bundle. The minimum host version remains Obsidian 1.7.2.
 - The actual desktop companion and marked-fixture driver are described in
   [`tests/e2e/README.md`](../tests/e2e/README.md). Test real YAML, visible source
   labels, core fixes, save checks, reload and pending-callback cleanup there.
-- **October 26, 2026: 18/18 desktop checks passed in Windows Obsidian 1.14.5.**
+- **Historical API-v1 baseline (before OKF v0.3), October 26, 2026: 18/18 desktop checks passed in Windows Obsidian 1.14.5.** This is not a receipt for the v0.3 bundle.
   The pre-integration bundle first failed API readiness in the actual app;
   the current bundle passed after the human trust gate was resolved. No
   trust/security action was automated. Real command invocation used the
@@ -230,4 +240,4 @@ deliberately separate from extending validation.
 - [Obsidian lifecycle management](https://docs.obsidian.md/plugins/guides/lifecycle-management)
 - [Obsidian plugin manifest](https://docs.obsidian.md/Reference/Manifest)
 - [Obsidian API declarations](https://github.com/obsidianmd/obsidian-api)
-- [OKF specification and conformance](https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md#11-conformance)
+- [Pinned OKF v0.3 conformance rules](https://github.com/open-knowledge-format/open-knowledge-format/blob/527e81aff55992be21507e97004286789126f88c/SPEC.md#11-conformance)

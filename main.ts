@@ -17,7 +17,6 @@ import {
   WARNABLE_FIELDS,
   validateContent,
   applyFixes,
-  trustTierOfContent,
   isReserved,
   isExcluded,
   basename,
@@ -43,6 +42,7 @@ import { VALIDATORS_READY, VALIDATORS_STOPPING, type OkfApiV1 } from "./api";
 import { collectVault, scanResults, summarizeScan, type ScanHost, type ScanSummary } from "./scan";
 import type { Conformance } from "./validation-types";
 import { snapshotSettings } from "./validation";
+import { dotPath, legacy, readFrontmatter, splitFrontmatter, supported, type BundleContext } from "./frontmatter";
 
 /**
  * How far a folder sits from the vault root, which is 0. Indexes are written
@@ -165,7 +165,7 @@ export default class OkfPlugin extends Plugin {
     });
     this.addCommand({
       id: "okf-migrate-v01-v02",
-      name: "Migrate note to latest OKF",
+      name: "Migrate legacy timestamp and Citations in active note",
       checkCallback: (checking) => {
         const f = this.app.workspace.getActiveFile();
         if (!f || f.extension !== "md" || isReserved(f.path)) return false;
@@ -287,6 +287,14 @@ export default class OkfPlugin extends Plugin {
 
   private scanHost(): ScanHost {
     return { configDir: this.app.vault.configDir,
+      hasPath: (path: string, fileOnly?: boolean) => {
+        const target = this.app.vault.getAbstractFileByPath(path);
+        return target?.path === path && (!fileOnly || target instanceof TFile);
+      },
+      readRootIndex: async () => {
+        const root = this.app.vault.getAbstractFileByPath("index.md");
+        return root instanceof TFile && root.path === "index.md" ? this.app.vault.read(root) : null;
+      },
       files: () => this.app.vault.getMarkdownFiles().map((file) => ({ path: file.path, read: () => this.app.vault.read(file) })),
       folders: (settings) => this.indexableFolders(settings).map((folder) => ({ path: folder.path,
         check: () => this.indexGapsForFolder(folder, settings) })) };
@@ -385,9 +393,9 @@ export default class OkfPlugin extends Plugin {
     this.validatorsChanged();
   }
 
-  private isConcept(file: TFile): boolean {
+  private isCandidate(file: TFile): boolean {
     if (file.extension !== "md") return false;
-    if (isExcluded(file.path, this.settings)) return false;
+    if (file.path.startsWith(this.app.vault.configDir + "/") || isExcluded(file.path, this.settings)) return false;
     return true;
   }
   private isRoot(file: TFile): boolean {
@@ -445,7 +453,7 @@ export default class OkfPlugin extends Plugin {
 
   private async onFileChanged(file: TFile) {
     if (this.unloaded || !this.apiV1) return;
-    if (!this.isConcept(file)) return;
+    if (!this.isCandidate(file)) return;
 
     if (this.settings.fixOnSave && !isReserved(file.path)) {
       const n = await this.fixFile(file, false);
@@ -516,39 +524,17 @@ export default class OkfPlugin extends Plugin {
   async onStatusClick() {
     if (!this.apiV1 || this.unloaded) return;
     const file = this.app.workspace.getActiveFile();
-    if (!file || file.extension !== "md" || isReserved(file.path)) {
+    if (!file || !this.isCandidate(file) || isReserved(file.path)) {
       await this.scanVault(true, false);
       return;
     }
-    // Validate first so we know whether a required field was missing *before*
-    // auto-fix (which only fills a placeholder type the user should refine).
-    let content = await this.app.vault.read(file);
-    const preIssues = validateContent(
-      file.path,
-      content,
-      this.isRoot(file),
-      this.settings
-    );
-    const hadRequiredError = preIssues.some((i) => i.severity === "error");
-
-    // Auto-fix structure (frontmatter block, placeholder type, title, generated).
     await this.fixFile(file, false);
-
-    content = await this.app.vault.read(file);
-    const postIssues = (await this.controller!.createPass().evaluate(file.path, content)).issues;
     await this.validateActive(file, true);
-
-    const remainingErrors = postIssues.filter((i) => i.severity === "error" && !i.providerId);
-    if (remainingErrors.length > 0) {
-      // Something the fixer couldn't resolve automatically.
-      this.promptForRequiredFields(file, remainingErrors);
-    } else if (hadRequiredError) {
-      // Required field was just auto-filled with a placeholder — let the user
-      // set the real value rather than leaving the default.
-      this.promptForRequiredFields(file, preIssues.filter((i) => i.severity === "error"));
-    } else {
-      new Notice(postIssues.some((i) => i.providerId) ? "OKF core checks passed; extension findings remain in the report." : "OKF: core checks passed ✅");
-    }
+    const result = this.activeResult;
+    if (result?.path !== file.path) return;
+    const missingType = result.issues.filter(i => !i.providerId && i.rule === "§3.2" && i.severity === "error");
+    if (missingType.length && result.conformance !== "unknown") this.promptForRequiredFields(file, missingType);
+    else new Notice(`OKF core: ${result.conformance}. See the report for details.`);
   }
 
   /** Open a modal asking the user to supply required OKF fields. */
@@ -563,7 +549,7 @@ export default class OkfPlugin extends Plugin {
     const token = ++this.activeSequence;
     this.setActiveResult(null);
     if (!this.apiV1 || this.unloaded) return;
-    if (!this.isConcept(file) || file.path.startsWith(this.app.vault.configDir + "/")) return;
+    if (!this.isCandidate(file) || file.path.startsWith(this.app.vault.configDir + "/")) return;
     const abort = this.activeAbort = new AbortController(), pass = this.controller!.createPass(abort.signal);
     const current = () => !this.unloaded && !abort.signal.aborted && token === this.activeSequence && pass.isCurrent() &&
       this.app.workspace.getActiveFile()?.path === file.path;
@@ -574,7 +560,7 @@ export default class OkfPlugin extends Plugin {
       const result = await pass.evaluate(file.path, content);
       result.issues.push(...(await this.indexGapsForActive(file, pass.settings)));
       if (!current()) return;
-      this.updateStatus(result.issues, content, result.conformance, result.extensions.complete);
+      this.updateStatus(result.issues, isReserved(file.path) ? undefined : result.trustTier, result.conformance, result.extensions.complete);
       this.setActiveResult({ path: file.path, issues: result.issues, conformance: result.conformance,
         extensionsComplete: result.extensions.complete });
       if (this.revealActivePath === file.path) { this.revealActivePath = undefined; await this.activateView(); }
@@ -589,17 +575,13 @@ export default class OkfPlugin extends Plugin {
     }
   }
 
-  private updateStatus(issues: OkfIssue[], content?: string, conformance: Conformance = "unknown", extensionsComplete = true) {
+  private updateStatus(issues: OkfIssue[], tier?: string | null, conformance: Conformance = "unknown", extensionsComplete = true) {
     const errs = issues.filter((i) => i.severity === "error" && !i.providerId && !i.rule.startsWith("portent/")).length;
     const extensionErrors = issues.filter((i) => i.severity === "error" && i.providerId).length;
     const warns = issues.filter((i) => i.severity === "warning").length;
     // The derived trust tier (§5.3) describes the note rather than faulting it,
     // so it rides in the tooltip instead of the issue list. The report pane only
     // lists files that have issues, which would hide the tier on a clean note.
-    const tier =
-      this.settings.warnTrustFields && content !== undefined
-        ? trustTierOfContent(content)
-        : null;
     this.statusEl.removeClass(
       "okf-statusbar-ok",
       "okf-statusbar-bad",
@@ -622,7 +604,7 @@ export default class OkfPlugin extends Plugin {
     if (!extensionsComplete) this.statusEl.setText(this.statusEl.getText() + " · Ext incomplete");
     // Tooltip carries the detail so we don't need a Notice for routine checks.
     if (issues.length === 0) {
-      const lines = [conformance === "conformant" ? "Active note conforms to OKF v0.2" : "Core conformance unknown: incomplete/reduced checks"];
+      const lines = [conformance === "conformant" ? `Active note passed OKF checks (engine v${OKF_VERSION})` : "Core conformance unknown"];
       if (tier) lines.push(`Trust tier: ${tier}`);
       lines.push("");
       lines.push("Click to fix core fields and open the report");
@@ -720,90 +702,60 @@ export default class OkfPlugin extends Plugin {
     this.getReportView()?.setActive(r?.path ?? null, r?.issues ?? [], r?.conformance ?? "unknown", r?.extensionsComplete ?? false);
   }
 
-  async fixFile(file: TFile, notify: boolean): Promise<number> {
-    if (this.unloaded || !this.apiV1) return 0;
+  private async writeIfUnchanged(file: TFile, before: string, after: string): Promise<boolean> {
+    let changed = false;
+    await this.app.vault.process(file, current => {
+      if (this.unloaded || current !== before) return current;
+      changed = true; this.selfWrites.add(file.path); return after;
+    });
+    return changed;
+  }
+
+  async fixFile(file: TFile, notify: boolean, bundle?: BundleContext): Promise<number> {
+    if (this.unloaded || !this.apiV1 || !this.isCandidate(file) || isReserved(file.path)) return 0;
+    bundle ??= await this.controller!.readBundle();
+    if (!supported(bundle)) return 0;
     const content = await this.app.vault.read(file);
-    const issues = validateContent(
-      file.path,
-      content,
-      this.isRoot(file),
-      this.settings
-    );
-    if (isReserved(file.path)) {
-      if (notify)
-        new Notice("OKF: reserved files (index/log) are not auto-fixable.");
-      return 0;
-    }
-    const { content: fixed, applied } = applyFixes(
-      file.path,
-      content,
-      issues,
-      this.settings,
-      this.settings.autoMigrateOnFix
-    );
-    if (applied.length > 0 && fixed !== content) {
-      if (this.unloaded) return 0;
-      this.selfWrites.add(file.path);
-      await this.app.vault.modify(file, fixed);
-      if (!this.busy && this.app.workspace.getActiveFile()?.path === file.path) await this.validateActive(file, notify);
-      if (notify)
-        new Notice(`OKF fixed ${file.basename}: ${applied.join(", ")}`);
-      return applied.length;
-    }
+    const issues = validateContent(file.path, content, this.isRoot(file), this.settings, undefined, bundle);
+    const fixed = applyFixes(file.path, content, issues, this.settings);
+    const changed = fixed.applied.length && await this.writeIfUnchanged(file, content, fixed.content);
     if (!this.busy && this.app.workspace.getActiveFile()?.path === file.path) await this.validateActive(file, notify);
-    if (notify) new Notice("OKF: nothing auto-fixable on this note.");
-    return 0;
+    if (notify) new Notice(changed ? `OKF fixed ${file.basename}: ${fixed.applied.join(", ")}` : "OKF: nothing safely auto-fixable on this note.");
+    return changed ? fixed.applied.length : 0;
   }
 
-  /**
-   * Migrate a note from OKF v0.1 to v0.2 (§13): rename `timestamp` → `generated`
-   * and lift a body `# Citations` list into `sources`. Runs the migration fixes
-   * that ordinary save-time auto-fix deliberately skips.
-   */
+  /** Explicit, note-local legacy migration (Appendix B). Never declares a bundle version. */
   async migrateActive(file: TFile) {
-    if (this.unloaded || !this.apiV1) return;
+    if (this.unloaded || !this.apiV1 || !this.isCandidate(file) || isReserved(file.path)) return;
+    const bundle = await this.controller!.readBundle();
+    if (!supported(bundle)) { new Notice("OKF: cannot migrate an unknown bundle version."); return; }
     const content = await this.app.vault.read(file);
-    const issues = validateContent(
-      file.path,
-      content,
-      this.isRoot(file),
-      this.settings
-    );
-    const { content: fixed, applied } = applyFixes(
-      file.path,
-      content,
-      issues,
-      this.settings,
-      true
-    );
-    if (applied.length > 0 && fixed !== content) {
-      this.selfWrites.add(file.path);
-      await this.app.vault.modify(file, fixed);
-      new Notice(`OKF migrated ${file.basename}: ${applied.join(", ")}`);
-    } else {
-      new Notice("OKF: nothing to migrate — note already uses v0.2 fields.");
-    }
+    const issues = validateContent(file.path, content, this.isRoot(file), this.settings, undefined, bundle);
+    const fixed = applyFixes(file.path, content, issues, this.settings, true);
+    if (fixed.applied.length && await this.writeIfUnchanged(file, content, fixed.content)) {
+      new Notice(`OKF migrated ${file.basename}: ${fixed.applied.join(", ")}`);
+    } else new Notice("OKF: no legacy fields that can be safely migrated. No changes made.");
     await this.validateActive(file, false);
   }
 
-  /**
-   * Write user-supplied frontmatter values (from the prompt modal) into a note,
-   * using Obsidian's safe frontmatter editor. Empty values are skipped.
-   */
-  async setFrontmatterFields(file: TFile, fields: Record<string, string>) {
-    if (this.unloaded || !this.apiV1) return;
-    this.selfWrites.add(file.path);
-    await this.app.fileManager.processFrontMatter(
-      file,
-      (fm: Record<string, unknown>) => {
-        for (const [k, v] of Object.entries(fields)) {
-          const val = (v ?? "").trim();
-          if (val.length > 0) fm[k] = val;
-        }
-      }
-    );
-    // Refresh status after the edit.
+  /** Only the human-confirmed legacy prompt may add a type. Do not reserialize
+   * unrelated values (including unknown nested keys) with a second YAML schema. */
+  async setFrontmatterFields(file: TFile, fields: Record<string, string>): Promise<boolean> {
+    if (this.unloaded || !this.apiV1 || !this.isCandidate(file) || isReserved(file.path)) return false;
+    const bundle = await this.controller!.readBundle();
+    if (!supported(bundle) || !legacy(bundle.version)) return false;
+    const original = await this.app.vault.read(file), fm = readFrontmatter(original);
+    if (fm.error || (fm.data && "type" in fm.data) || !fields.type?.trim()) return false;
+    const eol = original.includes("\r\n") ? "\r\n" : "\n";
+    const additions = ["type", "title", "description"].filter(k => fields[k]?.trim() && !(fm.data && k in fm.data))
+      .map(k => `${k}: ${JSON.stringify(fields[k].trim())}`).join(eol) + eol;
+    const close = original.length - fm.body.length - 3;
+    const bom = original.startsWith("\uFEFF") ? "\uFEFF" : "";
+    const candidate = fm.hasFm ? original.slice(0, close) + additions + original.slice(close)
+      : bom + "---" + eol + additions + "---" + eol + eol + original.slice(bom.length);
+    if (readFrontmatter(candidate).data?.type !== fields.type.trim() || !await this.writeIfUnchanged(file, original, candidate)) return false;
     await this.validateActive(file, false);
+    return true;
   }
 
   async fixAll() {
@@ -815,11 +767,12 @@ export default class OkfPlugin extends Plugin {
     this.busy = true; this.operationRevision++;
     let changed = 0;
     try {
+      const bundle = await this.controller!.readBundle();
       const files = this.candidateFiles().filter((f) => !isReserved(f.path));
       await this.processQueue(
         files,
         async (f) => {
-          const n = await this.fixFile(f, false);
+          const n = await this.fixFile(f, false, bundle);
           if (n > 0) changed++;
         },
         "OKF: fixing"
@@ -837,7 +790,7 @@ export default class OkfPlugin extends Plugin {
     folder: TFolder,
     notify = true
   ): Promise<boolean> {
-    if (!folder) {
+    if (!folder || dotPath(folder.path)) {
       if (notify) new Notice("OKF: no folder for the active note.");
       return false;
     }
@@ -851,6 +804,10 @@ export default class OkfPlugin extends Plugin {
     // same one that deletes it.
     const current =
       existing instanceof TFile ? await this.app.vault.read(existing) : null;
+    const fm = current === null ? null : readFrontmatter(current);
+    if (fm?.error || (indexPath !== "index.md" && fm?.hasFm)) return false;
+    const bundle = indexPath === "index.md" ? {version: fm?.version} : await this.controller!.readBundle();
+    if (!supported(bundle)) return false;
     const kept =
       current === null
         ? ""
@@ -888,6 +845,7 @@ export default class OkfPlugin extends Plugin {
     const files: IndexEntry[] = [];
 
     for (const child of children) {
+      if (dotPath(child.path)) continue;
       if (child instanceof TFile) {
         if (isReserved(child.path)) continue;
         if (child.extension !== "md") {
@@ -1013,21 +971,29 @@ export default class OkfPlugin extends Plugin {
       out = mergeIndex(
         current,
         entries,
-        (target) => this.app.vault.getAbstractFileByPath(base + target) !== null
+        (target) => this.app.vault.getAbstractFileByPath(base + target) !== null, indexPath
       );
     } else {
       out = renderIndex(entries, kept);
       // The bundle-root index.md is the only place `okf_version` frontmatter is
       // allowed (§8, §12); non-root indexes stay frontmatter-free.
       if (indexPath === "index.md") {
-        out = `---\nokf_version: "${OKF_VERSION}"\n---\n\n${out}`;
+        if (current !== null) {
+          const fm = splitFrontmatter(current);
+          if (fm.hasFm) {
+            const eol = current.includes("\r\n") ? "\r\n" : "\n";
+            out = current.slice(0, current.length - fm.body.length) + eol + eol + out.replace(/\r?\n/g, eol);
+          }
+        } else if (!folder.children.length) {
+          // A populated unversioned bundle may rely on legacy path fallback.
+          out = `---\nokf_version: "${OKF_VERSION}"\n---\n\n${out}`;
+        }
       }
     }
     const existing = this.app.vault.getAbstractFileByPath(indexPath);
     if (existing instanceof TFile) {
       if (current === out) return false;
-      this.selfWrites.add(indexPath);
-      await this.app.vault.modify(existing, out);
+      if (!await this.writeIfUnchanged(existing, current!, out)) return false;
     } else {
       this.selfWrites.add(indexPath);
       await this.app.vault.create(indexPath, out);
@@ -1079,7 +1045,7 @@ export default class OkfPlugin extends Plugin {
     const unlisted = unlistedEntries(
       await this.app.vault.cachedRead(index),
       entries,
-      (target) => this.app.vault.getAbstractFileByPath(base + target) !== null
+      (target) => this.app.vault.getAbstractFileByPath(base + target) !== null, indexPath
     );
     if (unlisted.length === 0) return null;
     return {
@@ -1389,8 +1355,8 @@ class OkfSettingTab extends PluginSettingTab {
 
     return [
       {
-        name: "Default type for auto-fix",
-        desc: "Value inserted into `type` when fixing notes that lack it.",
+        name: "Default type for legacy prompt",
+        desc: "Suggested type if you explicitly fill in a missing type in a declared legacy bundle. Untyped v0.3 Markdown is not a concept.",
         control: (row) =>
           row.addText((t) =>
             t.setValue(s.defaultType).onChange((v) => {
@@ -1401,7 +1367,7 @@ class OkfSettingTab extends PluginSettingTab {
       },
       {
         name: "Default actor for `generated.by`",
-        desc: "Actor written when auto-fix adds a `generated` block (§7). Use `<producer>/<version>` (e.g. `okf-enforcer/0.6`) or `human:<id>`. Avoid commas — the block is written as inline YAML.",
+        desc: "Actor used for a new generated record (§7): <producer>/<version> or <scheme>:<id>, for example okf-enforcer/0.6 or human:alex.",
         control: (row) =>
           row.addText((t) =>
             t.setValue(s.defaultActor).onChange((v) => {
@@ -1413,7 +1379,7 @@ class OkfSettingTab extends PluginSettingTab {
       { name: "Automation", heading: true },
       {
         name: "On save",
-        desc: "What happens when you edit a note. \"Check\" validates it and updates the status bar; \"Check and fix\" also inserts the missing OKF frontmatter (`type`, `title`, `generated`), never overwriting a value you've set. A note is always validated when you *open* it, whichever this is set to.",
+        desc: "Check validates without writing. Check and fix can add missing title or generated fields to typed concepts. Neither mode converts ordinary Markdown or migrates legacy data. Opening a note is read-only.",
         control: (row) =>
           row.addDropdown((d) =>
             d
@@ -1437,17 +1403,6 @@ class OkfSettingTab extends PluginSettingTab {
           row.addToggle((tg) =>
             tg.setValue(s.scanOnStartup).onChange((v) => {
               s.scanOnStartup = v;
-              save();
-            })
-          ),
-      },
-      {
-        name: "Auto-migrate to latest OKF on fix",
-        desc: "Let auto-fix also upgrade notes to the latest OKF version — `timestamp` → `generated`, `# Citations` → `sources`. Off leaves this to the \"Migrate note to latest OKF\" command, since a migration rewrites what you wrote.",
-        control: (row) =>
-          row.addToggle((tg) =>
-            tg.setValue(s.autoMigrateOnFix).onChange((v) => {
-              s.autoMigrateOnFix = v;
               save();
             })
           ),
@@ -1502,7 +1457,7 @@ class OkfSettingTab extends PluginSettingTab {
       { name: "Rules", heading: true },
       {
         name: "Warn about missing fields",
-        desc: "Comma-separated: which recommended frontmatter fields are worth a warning when a note has none. `title`, `description`, and `generated` are what §4.1 and §5.2 recommend; `tags` the spec never asks for. Leave blank to warn about none.",
+        desc: "Optional fields worth an authoring reminder in this vault: title, description, generated or tags. Leave blank for none; these are not conformance requirements.",
         control: (row) =>
           row.addText((t) =>
             t
@@ -1516,7 +1471,7 @@ class OkfSettingTab extends PluginSettingTab {
       },
       {
         name: "Validate trust & lifecycle fields",
-        desc: "Check the v0.2 trust fields on notes that carry them: `verified`, `status`, `stale_after` (including whether it has passed), `sources` (§5), and show the note's trust tier in the status-bar tooltip. Advisory; off by default.",
+        desc: "Check provenance, current verifications, status, superseded_by and freshness (§5). Show the current trust tier in the active note's tooltip. Advisory; off by default.",
         control: (row) =>
           row.addToggle((tg) =>
             tg.setValue(s.warnTrustFields).onChange((v) => {
@@ -1728,7 +1683,7 @@ class OkfPromptModal extends Modal {
     contentEl.createEl("h3", { text: "OKF — required fields" });
     contentEl.createEl("p", {
       cls: "okf-modal-intro",
-      text: `“${this.file.basename}” needs a valid OKF type. Set the fields below and save.`,
+      text: `Add missing fields to “${this.file.basename}”. Existing values are kept. Edit an existing invalid type in the note itself.`,
     });
 
     if (this.errors.length) {
@@ -1779,12 +1734,12 @@ class OkfPromptModal extends Modal {
         typeInput.focus();
         return;
       }
-      await this.plugin.setFrontmatterFields(this.file, {
+      const changed = await this.plugin.setFrontmatterFields(this.file, {
         type,
         title: this.titleValue,
         description: this.descValue,
       });
-      new Notice("OKF: fields saved ✓");
+      new Notice(changed ? "OKF: missing fields saved ✓" : "OKF: no safe insertion; edit this note's frontmatter directly.");
       this.close();
     };
 

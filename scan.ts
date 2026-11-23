@@ -1,6 +1,7 @@
 // Internal read-only collector shared by API and UI. No presentation or writes.
 import type { OutcomeCounts, ScanOutcome, VaultReport } from "./validation-types";
 import type { NoteEvaluation } from "./api-service";
+import { readFrontmatter, type BundleContext } from "./frontmatter";
 import type { ExtensionEvaluation } from "./extensions";
 import { isExcluded, validateContent, type OkfIssue, type OkfSettings } from "./validator";
 import { apiError, conformanceFor, publicDiagnostics, reportMetadata, type EvaluationContext } from "./validation";
@@ -12,6 +13,8 @@ export interface ScanFolder {
 }
 export interface ScanHost {
   configDir: string;
+  hasPath?: BundleContext["exists"];
+  readRootIndex?(): Promise<string | null>;
   files(): ScanFile[];
   folders(settings: OkfSettings): ScanFolder[];
 }
@@ -28,7 +31,7 @@ export interface CollectedScan extends Omit<VaultReport, "files" | "folders"> {
   folders: CollectedOutcome[];
 }
 export interface CollectContext extends EvaluationContext {
-  evaluateNote?(path: string, content: string): Promise<NoteEvaluation>;
+  evaluateNote?(path: string, content: string, bundle: BundleContext): Promise<NoteEvaluation>;
   guard(): void;
   signal?: AbortSignal;
   clock?: () => Date;
@@ -66,7 +69,7 @@ export async function collectVault(host: ScanHost, settings: OkfSettings, contex
     path !== configDir && !path.startsWith(configDir + "/") && !isExcluded(path, settings);
   let files: ScanFile[], folders: ScanFolder[];
   try {
-    files = host.files().filter((file) => included(file.path)).sort((a, b) => a.path.localeCompare(b.path));
+    files = host.files().filter((file) => file.path.endsWith(".md") && included(file.path)).sort((a, b) => a.path.localeCompare(b.path));
     folders = settings.reportIndexGaps
       ? host.folders(settings).filter((folder) => included(folder.path)).sort((a, b) => a.path.localeCompare(b.path))
       : [];
@@ -77,19 +80,36 @@ export async function collectVault(host: ScanHost, settings: OkfSettings, contex
   const pending = (path: string): CollectedOutcome => ({ path, status: "unprocessed", issues: [] });
   const fileOutcomes = files.map((file) => pending(file.path));
   const folderOutcomes = folders.map((folder) => pending(folder.path));
+  // The declaration governs the whole pass, regardless of filename sort order.
+  // Read the root at most once; retain a read failure in its original outcome.
+  const root = files.find(f => f.path === "index.md");
+  const bundle: BundleContext = { observed: true, exists: host.hasPath };
+  let rootContent: string | undefined, rootError: unknown;
+  if (root && !context.signal?.aborted) {
+    try {
+      rootContent = await root.read();
+      const fm = readFrontmatter(rootContent);
+      bundle.version = fm.version; bundle.unreadableRoot = !!fm.error;
+    }
+    catch (error) { rootError = error; bundle.unreadableRoot = true; }
+    context.guard();
+  }
   const jobs = [
     ...files.map((file, index) => async () => {
       const outcome = fileOutcomes[index];
       let content: string;
-      try { content = await file.read(); }
+      try {
+        if (file === root && rootContent === undefined) throw rootError;
+        content = file === root ? rootContent! : await file.read();
+      }
       catch (error) { failed(outcome, error); return; }
       context.guard();
       if (context.signal?.aborted) return;
       if (context.evaluateNote) {
-        const result = await context.evaluateNote(file.path, content);
+        const result = await context.evaluateNote(file.path, content, bundle);
         context.guard();
         outcome.issues = result.issues; outcome.extensions = result.extensions;
-      } else outcome.issues = validateContent(file.path, content, !file.path.includes("/"), settings, now);
+      } else outcome.issues = validateContent(file.path, content, !file.path.includes("/"), settings, now, bundle);
       outcome.status = "validated";
     }),
     ...folders.map((folder, index) => async () => {
@@ -129,13 +149,17 @@ export async function collectVault(host: ScanHost, settings: OkfSettings, contex
   const assessments = fileOutcomes.flatMap((o) => o.extensions?.assessments ?? []);
   const failedExtensions = assessments.filter((a) => a.status === "failed").length;
   const cancelledExtensions = assessments.filter((a) => a.status === "cancelled").length;
+  // A malformed root is a proven §4 error. Its version uncertainty on other
+  // notes must not hide the error in the aggregate, nor certify those notes.
+  const core = [...fileOutcomes, ...folderOutcomes].flatMap(o => o.issues)
+    .filter(i => !(rootContent !== undefined && bundle.unreadableRoot && i.unknownVersion));
   return {
     ...metadata,
     scope: { kind: "configured-vault", configDir, excludeFolders: [...settings.excludeFolders] },
     status,
     extensions: { complete: !failedExtensions && !cancelledExtensions && status === "complete",
       evaluated: assessments.length, failed: failedExtensions, cancelled: cancelledExtensions },
-    conformance: conformanceFor([...fileOutcomes, ...folderOutcomes].flatMap((o) => o.issues), metadata.checkCoverage, status === "complete"),
+    conformance: conformanceFor(core, metadata.checkCoverage, status === "complete"),
     startedAt: now.toISOString(),
     finishedAt: (context.clock?.() ?? new Date()).toISOString(),
     files: fileOutcomes,

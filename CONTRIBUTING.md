@@ -7,7 +7,7 @@ Thanks for your interest in improving OKF Enforcer!
 ```bash
 git clone https://github.com/MartinForReal/okf-enforcer.git
 cd okf-enforcer
-npm install
+npm ci
 npm test
 npx tsc --noEmit
 npm run build
@@ -19,8 +19,8 @@ into `<your-vault>/.obsidian/plugins/okf-enforcer/` and reload Obsidian. The
 
 ## Before opening a pull request
 
-- Run `npm test` — these are Node tests with Obsidian boundary doubles, not
-  proof of actual YAML parsing, desktop UI behavior or mobile acceptance.
+- Run `npm test` — the real YAML/Markdown parsers and pinned Acme Retail examples
+  run with Obsidian boundary doubles. This is not desktop or mobile acceptance.
 - Run `npx tsc --noEmit` — the build must type-check cleanly.
 - Run `npm run build` — `main.js` must build without errors.
 - **Commit the rebuilt `main.js`.** It is a tracked artifact, not a build output

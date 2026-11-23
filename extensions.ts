@@ -1,7 +1,7 @@
 // Internal provider registry: bounded async work, attribution, no core-rule mutation.
-import { parseYaml } from "obsidian";
+import { readFrontmatter, text } from "./frontmatter";
 import type { ValidationContext, ValidationDiagnostic, ValidationProvider } from "./api";
-import { isReserved, splitFrontmatter, type OkfIssue } from "./validator";
+import { isReserved, type OkfIssue } from "./validator";
 import { apiError } from "./validation";
 
 interface Entry {
@@ -47,18 +47,8 @@ function immutableData(value: unknown, seen = new WeakMap<object, unknown>()): u
   return Object.freeze(copy);
 }
 
-function contextTemplate(path: string, content: string, core: readonly OkfIssue[], now: Date): Omit<ValidationContext, "signal"> {
-  const parts = splitFrontmatter(content);
-  let frontmatter: Record<string, unknown> | null = null;
-  let frontmatterState: ValidationContext["frontmatterState"] = parts.hasFm ? "invalid" : "missing";
-  if (parts.hasFm) {
-    try {
-      const parsed: unknown = parseYaml(parts.raw);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        frontmatter = parsed as Record<string, unknown>; frontmatterState = "valid";
-      }
-    } catch { /* Body validators still receive explicit invalid frontmatter. */ }
-  }
+function contextTemplate(path: string, content: string, core: readonly OkfIssue[], now: Date, parts: ReturnType<typeof readFrontmatter>): Omit<ValidationContext, "signal"> {
+  const frontmatter = parts.data, frontmatterState = parts.error ? "invalid" : frontmatter ? "valid" : "missing";
   return { path, content, kind: isReserved(path) ?? "concept", body: parts.body,
     frontmatter, frontmatterState, evaluatedAt: now.toISOString(),
     coreDiagnostics: core.filter((issue) => !issue.providerId && !issue.rule.startsWith("portent/"))
@@ -103,9 +93,11 @@ export class ExtensionRegistry {
   }
 
   async validate(path: string, content: string, core: readonly OkfIssue[], now: Date,
-    snapshot = this.snapshot(), signal?: AbortSignal): Promise<ExtensionEvaluation> {
-    if (!snapshot.entries.length) return { revision: snapshot.revision, issues: [], assessments: [], complete: true };
-    const template = contextTemplate(path, content, core, now);
+    snapshot = this.snapshot(), signal?: AbortSignal, fm = readFrontmatter(content), legacyBundle = false): Promise<ExtensionEvaluation> {
+    if (!snapshot.entries.length || (!legacyBundle && !isReserved(path) && !fm.error && !text(fm.data?.type))) {
+      return { revision: snapshot.revision, issues: [], assessments: [], complete: true };
+    }
+    const template = contextTemplate(path, content, core, now, fm);
     const results = await Promise.all(snapshot.entries.map((entry) => this.invoke(entry, template, signal)));
     return { revision: snapshot.revision, issues: results.flatMap((result) => result.issues),
       assessments: results.map((result) => result.assessment),

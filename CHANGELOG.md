@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   1.14.5 E2E suite passes 18 checks; mobile runtime is untested.
 
 ### Changed
+- Target the non-draft OKF v0.3 SPEC. Distinguish non-concepts from malformed YAML; resolve bundle paths and current verifications; keep optional contract findings separate from conformance. Active, vault and supplied-content checks share the rules. Unsupported declared versions are never certified.
+- Preserve root-index metadata and existing/absent version declarations on refresh. Legacy `timestamp` and `# Citations` migration is explicitly note-local; automatic fixes no longer convert untyped notes or upgrade authored data.
 - Active-note, save, vault and post-fix checks share the extension pipeline.
   Vault reports retain unreadable/unprocessed coverage and count folder
   findings separately, rather than silently presenting partial work as clean.
