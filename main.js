@@ -6511,7 +6511,7 @@ function dotPath(path) {
 }
 
 // signals.ts
-var actor = (v) => text(v) && /^(?:[^\s/:]+\/\S+|[A-Za-z][A-Za-z\d+.\-]*:(?=.*\S).+)$/.test(v);
+var actor = (v) => text(v) && /^(?:[^\s/:]+\/\S+|[A-Za-z][A-Za-z\d+.-]*:(?=.*\S).+)$/.test(v);
 var OKF_STATUSES = ["draft", "stable", "deprecated"];
 var stamp = /^(\d{4}-\d\d-\d\d)(?:[Tt](\d\d):(\d\d):(\d\d)(?:\.(\d+))?(?:[Zz]|([+-])(\d\d):(\d\d)))?$/;
 function instant(value) {
@@ -12271,7 +12271,7 @@ function logHeadings(body) {
   return tokens.flatMap((t, i) => t.type === "heading_open" && t.tag === "h2" ? [tokens[i + 1].content.trim()] : []);
 }
 function localTarget(source, ref) {
-  if (/^(?:[A-Za-z][A-Za-z0-9+.\-]*:|\/\/)/.test(ref)) return null;
+  if (/^(?:[A-Za-z][A-Za-z0-9+.-]*:|\/\/)/.test(ref)) return null;
   const raw = ref.split(/[?#]/, 1)[0];
   if (!raw) return source;
   const parts = raw.startsWith("/") ? [] : source.split("/").slice(0, -1);

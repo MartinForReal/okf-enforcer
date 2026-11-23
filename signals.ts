@@ -2,7 +2,7 @@
 import { absent, items, legacy, mapping, text, type Mapping } from "./frontmatter";
 import type { OkfIssue } from "./validator";
 
-const actor = (v: unknown): v is string => text(v) && /^(?:[^\s/:]+\/\S+|[A-Za-z][A-Za-z\d+.\-]*:(?=.*\S).+)$/.test(v);
+const actor = (v: unknown): v is string => text(v) && /^(?:[^\s/:]+\/\S+|[A-Za-z][A-Za-z\d+.-]*:(?=.*\S).+)$/.test(v);
 export const OKF_STATUSES = ["draft", "stable", "deprecated"] as const;
 const stamp = /^(\d{4}-\d\d-\d\d)(?:[Tt](\d\d):(\d\d):(\d\d)(?:\.(\d+))?(?:[Zz]|([+-])(\d\d):(\d\d)))?$/;
 type Instant = { seconds: number; leap: number; fraction: string };

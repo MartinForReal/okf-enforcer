@@ -27,7 +27,7 @@ export function logHeadings(body: string): string[] {
 /** null means external, hidden or not a safe vault name. Split syntax before
  * decoding so %23 is a literal '#', while an unescaped # introduces a fragment. */
 export function localTarget(source: string, ref: string): string | null {
-  if (/^(?:[A-Za-z][A-Za-z0-9+.\-]*:|\/\/)/.test(ref)) return null;
+  if (/^(?:[A-Za-z][A-Za-z0-9+.-]*:|\/\/)/.test(ref)) return null;
   const raw = ref.split(/[?#]/, 1)[0];
   if (!raw) return source;
   const parts = raw.startsWith("/") ? [] : source.split("/").slice(0, -1);
