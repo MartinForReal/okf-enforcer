@@ -39,7 +39,7 @@ function setup() {
     getMarkdownFiles: () => [active], getRoot: () => root, getAbstractFileByPath: () => null },
     workspace: { on, trigger, onLayoutReady: (cb: () => void) => layouts.push(cb), getActiveFile: () => active,
       getLeavesOfType: () => [] }, metadataCache: { getFileCache: () => ({}) } };
-  const plugin = new OkfPlugin(app, { id: "okf-enforcer", version: "0.6.1" } as any);
+  const plugin = new OkfPlugin(app, { id: "okf-enforcer", version: "0.7.0" } as any);
   app.vault.process = async (f: TFile, update: (s: string) => string) => {
     const before = await app.vault.read(f), after = update(before);
     if (before !== after) await app.vault.modify(f, after); return after;
@@ -97,7 +97,7 @@ test("legacy-field migration is explicit, preserves unrelated text and cannot up
     assert.equal(doc, raw); assert.equal(writes, 0);
     await h.plugin.migrateActive(file);
     assert.match(doc, /x-config:\r\n  timestamp: keep\r\n/);
-    assert.match(doc, /generated:\r\n  by: "okf-enforcer\/0\.6"\r\n  at: "2024-01-02" # date from author/); assert.match(doc, /sources:/);
+    assert.match(doc, /generated:\r\n  by: "okf-enforcer\/0\.7"\r\n  at: "2024-01-02" # date from author/); assert.match(doc, /sources:/);
     assert.ok(doc.endsWith('# Notes\r\nLeave this.\r\n\r\n\r\n'));
     assert.equal(index, '---\nokf_version: "0.2"\n---\n');
     const done = doc; await h.plugin.migrateActive(file); assert.equal(doc, done); assert.equal(writes, 1);
