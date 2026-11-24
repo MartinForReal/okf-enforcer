@@ -947,7 +947,7 @@ export function validateContent(
       message: `Not a concept: ${fm.hasFm ? "no non-empty string type" : "no frontmatter"}.` });
     return issues;
   }
-  return [...issues, ...validateConcept(fm.data!, fm.body, path, settings, today, bundle)];
+  return [...issues, ...validateConcept(fm.data, fm.body, path, settings, today, bundle)];
 }
 
 function validateConcept(data: Record<string, unknown>, content: string, path: string, settings: OkfSettings, today: Date, bundle: BundleContext): OkfIssue[] {
@@ -1214,7 +1214,7 @@ function migrateCitations(body: string): { body: string; resources: string[] } |
     const line = lines[end++].trimEnd();
     if (!line.trim()) continue;
     const item = /^[-*+]\s+(\S+)$/.exec(line);
-    if (!item || /[<>\[\]`]/.test(item[1])) return null;
+    if (!item || /[<>[\]`]/.test(item[1])) return null;
     resources.push(item[1]);
   }
   return resources.length ? { resources, body: lines.slice(0, start).join("") + lines.slice(end).join("") } : null;
