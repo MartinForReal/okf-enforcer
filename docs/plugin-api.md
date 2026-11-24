@@ -1,9 +1,8 @@
 # Extending validation from another Obsidian plugin
 
-> API v1 is implemented on this development branch; this does not announce a
-> release. Feature-detect it rather than assuming an installed version has it.
+> Feature-detect `apiV1` rather than assuming an installed version has it.
 
-On this branch `apiVersion` is still `1` and `okfVersion` is `"0.3"`: the
+In OKF Enforcer 0.7.0, `apiVersion` is still `1` and `okfVersion` is `"0.3"`: the
 latter identifies the engine's target, not the version of any particular
 vault or its conformance. Registration is still the only API operation.
 

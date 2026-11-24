@@ -1,6 +1,6 @@
 {
   "name": "okf-enforcer",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "Validate Open Knowledge Format v0.3 bundles in Obsidian with v0.1/v0.2 compatibility.",
   "main": "main.js",
   "scripts": {

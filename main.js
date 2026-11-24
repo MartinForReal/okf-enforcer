@@ -12368,7 +12368,7 @@ function validateReferences(path, data, body, bundle, checkComputation) {
 var WARNABLE_FIELDS = ["title", "description", "generated", "tags"];
 var DEFAULT_SETTINGS = {
   defaultType: "Concept",
-  defaultActor: "okf-enforcer/0.6",
+  defaultActor: "okf-enforcer/0.7",
   // Optional authoring preferences; none of these are conformance requirements.
   warnMissingFields: ["title", "description", "generated"],
   warnTrustFields: false,
@@ -15026,10 +15026,10 @@ var OkfSettingTab = class extends import_obsidian2.PluginSettingTab {
       },
       {
         name: "Default actor for `generated.by`",
-        desc: "Actor used for a new generated record (\xA77): <producer>/<version> or <scheme>:<id>, for example okf-enforcer/0.6 or human:alex.",
+        desc: `Actor used for a new generated record (\xA77): <producer>/<version> or <scheme>:<id>, for example ${DEFAULT_SETTINGS.defaultActor} or human:alex.`,
         control: (row) => row.addText(
           (t) => t.setValue(s.defaultActor).onChange((v) => {
-            s.defaultActor = v.trim() || "okf-enforcer/0.6";
+            s.defaultActor = v.trim() || DEFAULT_SETTINGS.defaultActor;
             save();
           })
         )

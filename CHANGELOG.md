@@ -4,7 +4,19 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.7.0] - 2026-11-24
+
+### Changed
+- Validate OKF v0.3 bundles while retaining v0.1/v0.2 compatibility. Notes without a concept type are distinguished from malformed YAML; relative references resolve beside the referring file. Unsupported bundle versions are never certified.
+- Refreshing a root index preserves its metadata and version declaration. Migrating legacy `timestamp` and `# Citations` is an explicit, per-note action; automatic fixes no longer convert untyped notes or upgrade authored data.
+- New `generated` records use block YAML. The default actor is `okf-enforcer/0.7`; existing records and saved actor preferences are unchanged.
+
+### Fixed
+- A folder exclusion such as `assets` now skips matching folders at any depth. An exclusion such as `docs/assets` still applies only to that vault-relative subtree.
+
+## [0.6.2] - 2026-10-26
+
+The GitHub release was tagged `0.6.2`, but its attached plugin manifest reported `0.6.1`.
 
 ### Added
 - A registration-focused validation API for companion plugins, with copied
@@ -16,8 +28,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   1.14.5 E2E suite passes 18 checks; mobile runtime is untested.
 
 ### Changed
-- Target the non-draft OKF v0.3 SPEC. Distinguish non-concepts from malformed YAML; resolve bundle paths and current verifications; keep optional contract findings separate from conformance. Active, vault and supplied-content checks share the rules. Unsupported declared versions are never certified.
-- Preserve root-index metadata and existing/absent version declarations on refresh. Legacy `timestamp` and `# Citations` migration is explicitly note-local; automatic fixes no longer convert untyped notes or upgrade authored data.
 - Active-note, save, vault and post-fix checks share the extension pipeline.
   Vault reports retain unreadable/unprocessed coverage and count folder
   findings separately, rather than silently presenting partial work as clean.
@@ -597,6 +607,8 @@ Initial release.
 - Batched, non-blocking scan/fix queue with an inline progress bar for large vaults.
 - Settings for automation toggles, batch size, warning rules, and excluded folders.
 
+[0.7.0]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.7.0
+[0.6.2]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.6.2
 [0.6.1]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.6.1
 [0.6.0]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.6.0
 [0.5.0]: https://github.com/MartinForReal/okf-enforcer/releases/tag/0.5.0

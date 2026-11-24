@@ -1366,11 +1366,11 @@ class OkfSettingTab extends PluginSettingTab {
       },
       {
         name: "Default actor for `generated.by`",
-        desc: "Actor used for a new generated record (§7): <producer>/<version> or <scheme>:<id>, for example okf-enforcer/0.6 or human:alex.",
+        desc: `Actor used for a new generated record (§7): <producer>/<version> or <scheme>:<id>, for example ${DEFAULT_SETTINGS.defaultActor} or human:alex.`,
         control: (row) =>
           row.addText((t) =>
             t.setValue(s.defaultActor).onChange((v) => {
-              s.defaultActor = v.trim() || "okf-enforcer/0.6";
+              s.defaultActor = v.trim() || DEFAULT_SETTINGS.defaultActor;
               save();
             })
           ),

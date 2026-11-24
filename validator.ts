@@ -42,7 +42,7 @@ export interface OkfSettings extends PortentSettings {
   defaultType: string;
   /**
    * Actor written to `generated.by` when auto-fix creates a `generated` block
-   * (§5.2, §7). Follows the actor convention — e.g. `okf-enforcer/0.6` for the
+   * (§5.2, §7). Follows the actor convention — e.g. `okf-enforcer/0.7` for the
    * plugin, or `human:<id>` if a person wants edits attributed to them.
    */
   defaultActor: string;
@@ -119,7 +119,7 @@ export const WARNABLE_FIELDS = ["title", "description", "generated", "tags"] as 
 
 export const DEFAULT_SETTINGS: OkfSettings = {
   defaultType: "Concept",
-  defaultActor: "okf-enforcer/0.6",
+  defaultActor: "okf-enforcer/0.7",
   // Optional authoring preferences; none of these are conformance requirements.
   warnMissingFields: ["title", "description", "generated"],
   warnTrustFields: false,
